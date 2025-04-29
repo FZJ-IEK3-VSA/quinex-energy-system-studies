@@ -21,6 +21,8 @@ Application of Quenix on a set of papers
 ├── pyproject.toml     <- Project configuration file with package metadata for 
 │                         quenix_application and configuration for tools like black
 │
+├── environment.yml    <- roducible Mamba environment
+│
 └── quenix_application   <- Source code for use in this project.
     │
     ├── __init__.py             <- Makes quenix_application a Python module
@@ -30,8 +32,6 @@ Application of Quenix on a set of papers
     ├── dataset.py              <- Scripts to download or generate data
     │
     ├── features.py             <- Code to create features for modeling
-    │
-    ├── environment.yml         <- roducible Mamba environment
     │
     ├── modeling                
     │   ├── __init__.py 
@@ -46,5 +46,5 @@ Application of Quenix on a set of papers
 ## Setup (Mamba)
 
 1. Create Environment
-    ```bash
-   mamba env create -f environment.yml
+```bash
+mamba env create -f environment.yml

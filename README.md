@@ -16,29 +16,23 @@ Application of Quenix on a set of papers
 │   ├── processed      <- The final, canonical data sets for modeling.
 │   └── raw            <- The original, immutable data dump.  
 │
-├── models             <- Trained and serialized models, model predictions, or model summaries
-│
 ├── pyproject.toml     <- Project configuration file with package metadata for 
 │                         quenix_application and configuration for tools like black
 │
-├── environment.yml    <- roducible Mamba environment
+├── environment.yml    <- Reproducible Mamba environment
 │
 └── quenix_application   <- Source code for use in this project.
     │
-    ├── __init__.py             <- Makes quenix_application a Python module
+    ├── __init__.py           <- Makes quenix_application a Python module
     │
-    ├── config.py               <- Store useful variables and configuration
+    ├── levenshtein.py        <- Code to calculate levenshtein distance
     │
-    ├── dataset.py              <- Scripts to download or generate data
+    ├── oeoe_data.py          <- Code to load oeo data
     │
-    ├── features.py             <- Code to create features for modeling
+    ├── quenix.py             <- Code to run Quenix
     │
-    ├── modeling                
-    │   ├── __init__.py 
-    │   ├── predict.py          <- Code to run model inference with trained models          
-    │   └── train.py            <- Code to train models
-    │
-    └── plots.py                <- Code to create visualizations
+    ├── scopus_data.py        <- Code to load scopus data
+    
 ```
 
 --------

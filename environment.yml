@@ -3,5 +3,12 @@ channels:
   - conda-forge
 dependencies:
   - python=3.12.9
+  - requests
+  - ca-certificates
+  - openssl
+  - pandas
+  - certifi
+  - rdflib
+  - rapidfuzz
   - ipykernel
-prefix: C:\Users\m.gorres\AppData\Local\miniforge3\envs\quenix_application_env
+  - openpyxl

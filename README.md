@@ -31,8 +31,8 @@ Application of Quenix on a set of papers
     │
     ├── quenix.py             <- Code to run Quenix
     │
-    ├── scopus_data.py        <- Code to load scopus data
-    
+    └── scopus_data.py        <- Code to load scopus data
+
 ```
 
 --------

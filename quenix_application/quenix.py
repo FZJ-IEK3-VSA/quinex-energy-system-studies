@@ -1,5 +1,6 @@
 import requests
 import os 
+import re
 
 class Quenix:
     def __init__(self):
@@ -31,6 +32,21 @@ class Quenix:
             files.append(('files', (filename, pdf_test, 'application/pdf')))
         
         return self.post_request(url_endpoint, files=files)
+    
+    def list_added_papers(self, name):
+        url_endpoint = f"bulk_analysis/{name}/papers/"
+        return self.get_request(url_endpoint)
+    
+    def get_paper_id_by_doi(self, name, target_doi):
+        papers = self.list_added_papers(name)
+        for paper in papers:
+            try:
+                doi = re.search(r"doi:([^,]+)", paper["provenance"]["metadata_source"]["url"]).group(1)
+            except KeyError:
+                continue
+            if doi == target_doi:
+                return paper["id"]
+        return None
     
     def perform_analyis(self, name, papers_to_process, number_of_gpus=1, skip_imprecise_quantities=True):
         url_endpoint = f"bulk_analysis/{name}/process?skip_imprecise_quantities={skip_imprecise_quantities}&gpu_count={number_of_gpus}"

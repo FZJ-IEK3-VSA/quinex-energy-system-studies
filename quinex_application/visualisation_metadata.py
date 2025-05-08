@@ -1,10 +1,10 @@
 import pandas as pd
 import matplotlib.pyplot as plt
 
-class Visualisation():
-    def __init__(self):
+class VisualisationMetadata():
+    def __init__(self, df_path):
         pd.set_option('display.max_colwidth', None)
-        self.df = pd.read_csv("data/external/scopus_2025_04_30_cleaned.csv")
+        self.df = pd.read_csv(df_path)
 
     def plot_bar(self, data, xlabel, ylabel, title, horizontal=True, figsize=(10,3)):
         fig, ax = plt.subplots(figsize=figsize)

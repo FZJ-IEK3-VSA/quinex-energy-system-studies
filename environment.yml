@@ -1,4 +1,4 @@
-name: quenix_application_env
+name: quinex_application_env
 channels:
   - conda-forge
 dependencies:

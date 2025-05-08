@@ -3,16 +3,16 @@ import glob
 
 
 class ProcessScopusData():
-    def __init__(self):
+    def __init__(self, csvs_paths, output_path, cleaned_output_path):
         pd.set_option('display.max_colwidth', None)
-        self.csvs_paths = glob.glob("data/external/scopus/scopus_*.csv")
-        self.output_path = "data/external/scopus_2025_04_30.csv"
-        self.cleaned_output_path = "data/external/scopus_2025_04_30_cleaned.csv"
+        self.csvs_paths = csvs_paths
+        self.output_path = output_path
+        self.cleaned_output_path = cleaned_output_path
 
     def combine_csvs(self, sort_by_year=True):
         # Alle CSV-Dateien einlesen
         dfs = [pd.read_csv(path) for path in self.csvs_paths]
-        
+
         # Kombinieren und Duplikate entfernen
         self.df = pd.concat(dfs, ignore_index=True)
         self.df = self.df.drop_duplicates()
@@ -47,10 +47,16 @@ class ProcessScopusData():
     def load_csv(self, combined=True, cleaned=True, year=""):
         if combined:
             if cleaned:
-                path = "data/external/scopus_2025_04_30_cleaned.csv"
+                path = self.cleaned_output_path
             else:
-                path = "data/external/scopus_2025_04_30.csv"
+                path = self.output_path
         else:
-            path = "data/external/scopus/scopus_2025_04_30_" + f"{year}.csv"
+            for p in self.csvs_paths:
+                if year in p:
+                    path = p
+                    break
+            else:
+                raise ValueError(f"No CSV-path for the year {year}")
+
         df = pd.read_csv(path)
         return df   

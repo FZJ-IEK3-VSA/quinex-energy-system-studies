@@ -3,9 +3,9 @@ requires = ["flit_core >=3.2,<4"]
 build-backend = "flit_core.buildapi"
 
 [project]
-name = "quenix_application"
+name = "quinex_application"
 version = "0.0.1"
-description = "Application of Quenix on a set of papers"
+description = "Application of Quinex on a set of papers"
 authors = [
   { name = "Maxime Gorres" },
 ]
@@ -21,12 +21,12 @@ requires-python = "~=3.10.0"
 [tool.ruff]
 line-length = 99
 src = ["quenix_application"]
-include = ["pyproject.toml", "quenix_application/**/*.py"]
+include = ["pyproject.toml", "quinex_application/**/*.py"]
 
 [tool.ruff.lint]
 extend-select = ["I"]  # Add import sorting
 
 [tool.ruff.lint.isort]
-known-first-party = ["quenix_application"]
+known-first-party = ["quinex_application"]
 force-sort-within-sections = true
 

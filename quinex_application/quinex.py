@@ -2,7 +2,7 @@ import requests
 import os 
 import re
 
-class Quenix:
+class Quinex:
     def __init__(self):
         self.url_base = "http://134.94.117.238:5434/api/"
 
@@ -65,3 +65,15 @@ class Quenix:
         url = self.url_base + url_endpoint
         response = requests.post(url, timeout=timeout, **kwargs)
         return response.json()
+    
+    def get_bibliographic_metadata(self, quinex_result):
+        return quinex_result[0]['analysis_result']['metadata']['bibliographic']
+    
+    def get_figures(self, quinex_result):
+        return quinex_result[0]['analysis_result']['figures']
+
+    def get_tables(self, quinex_result):
+        return quinex_result[0]['analysis_result']['tables']
+    
+    def get_bibliography(self, quinex_result):
+        return quinex_result[0]['analysis_result']['bibliography']

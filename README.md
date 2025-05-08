@@ -21,17 +21,21 @@ Application of Quenix on a set of papers
 │
 ├── environment.yml    <- Reproducible Mamba environment
 │
-└── quenix_application   <- Source code for use in this project.
+└── quinex_application   <- Source code for use in this project.
     │
-    ├── __init__.py           <- Makes quenix_application a Python module
+    ├── __init__.py                 <- Makes quenix_application a Python module
     │
-    ├── levenshtein.py        <- Code to calculate levenshtein distance
+    ├── levenshtein.py              <- Code to calculate levenshtein distance
     │
-    ├── oeoe_data.py          <- Code to load oeo data
+    ├── mongo_store.py              <- Code to store results in mongodb
     │
-    ├── quenix.py             <- Code to run Quenix
+    ├── oeoe_data.py                <- Code to load oeo data
     │
-    └── scopus_data.py        <- Code to load scopus data
+    ├── quinex.py                   <- Code to run Quenix
+    │
+    ├── scopus_data.py              <- Code to load scopus data
+    │
+    └── visualiation_metadata.py    <- Code to visualize metadata of papers
 
 ```
 

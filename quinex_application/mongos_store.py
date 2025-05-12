@@ -1,29 +1,47 @@
 from datetime import datetime, UTC
+from typing import List, Any
+import sys
 from pymongo import MongoClient
 
-import sys
-
 class MongoStore:
-    def __init__(self, quinex, database_name, collection_name):
-        self.quinex = quinex
+    """
+    Handles storage and retrieval of paper data and analysis results
+    using MongoDB and an external Quinex API.
+    """
 
+    def __init__(self, quinex, database_name: str, collection_name: str):
+        """
+        Initializes the MongoStore with Quinex software and MongoDB collections.
+
+        Args:
+            quinex: The Quenix client used for performing analysis
+            database_name (str): Name of the MongoDB database.
+            collection_name (str): Name of the main collection to store papers.
+        """
+
+        self.quinex = quinex
         client = MongoClient("mongodb://localhost:27017/")
         self.db = client[database_name]
         self.collection = self.db[collection_name]
         self.failed_collection = self.db["failed_papers"]
 
-    def insert_paper(self, df_doi, name):
+    def insert_paper(self, name: str, df_doi) -> None:
+        """
+        Inserts DOIs into the main collection via Quinex and logs failures.
+
+        Args:
+            name (str): Project name for Quinex context.
+            df_doi (DataFrame):Pandas DataFrame containing a 'DOI' column.
+        """
+
         attempted = len(df_doi["DOI"])
-        added = 0 
-        already_existing = 0
-        failed = 0
+        added = already_existing = failed = 0
 
         for i, doi in enumerate(df_doi["DOI"], 1):
             result = self.quinex.add_doi(name, doi)
             paper_id = self.quinex.get_paper_id_by_doi(name, doi)
 
             if paper_id:
-                # Erfolgreich: in 'papers' speichern
                 result = self.collection.update_one(
                     {"_id": doi},
                     {
@@ -40,7 +58,6 @@ class MongoStore:
                 else: 
                     already_existing += 1
             else: 
-                # Fehlgeschlagen: in 'failed_papers' speichern
                 result = self.failed_collection.update_one(
                     {"_id": doi},
                     {
@@ -50,10 +67,8 @@ class MongoStore:
                     },
                     upsert=True
                 )
-                if result.upserted_id:
-                    failed += 1
-                else:
-                    failed += 1
+                
+                failed += 1
 
             sys.stdout.write(
             f"\rVerarbeitet: {i}/{attempted} | ✅ Neu: {added} | 🔁 Vorhanden: {already_existing} | ❌ Fehlgeschlagen: {failed}"
@@ -61,17 +76,20 @@ class MongoStore:
             sys.stdout.flush()
         
         print()
-        # Optional: aktueller Gesamtstand in der Datenbank
         total = self.collection.count_documents({})
         print(f"📚 Total DOIs currently stored: {total}")
 
-    def process_paper(self, name: str, dois: list[str]):
-        # Nur DOIs auswählen, bei denen noch keine Analyse durchgeführt wurde
+    def process_paper(self, name: str, dois: list[str]) -> None:
+        """
+        Performs analysis on papers with missing analysis results.
+
+        Args:
+            name (str): Project name for Quinex context.
+            dois (list[str]): List of DOIs to analyze.
+        """
+
         papers_to_analyze = list(self.collection.find(
-            {
-                "_id": {"$in": dois},
-                "analysis_result": None
-            },
+            {"_id": {"$in": dois},"analysis_result": None},
             {"_id": 1, "openalex_id": 1}
         ))
 
@@ -80,18 +98,31 @@ class MongoStore:
             return
         
         paper_ids = [p["openalex_id"] for p in papers_to_analyze]
-        print(paper_ids)
         
         try:
             result = self.quinex.perform_analyis(name, paper_ids)
-            print(result)
+            print(f"✅ Analysis finished: {result}")
         except Exception as e:
-            print(f"Error when performing quinex: {e}")
+            print(f"❌ Error when performing quinex: {e}")
 
-        total = len(papers_to_analyze)
+    def add_analysis(self, name: str, dois: list[str]) -> None:
+        """
+        Fetches analysis results from Quinex and stores them in the database.
+
+        Args:
+            name (str): Project name for Quinex context.
+            dois (list[str]): List of DOIs to update.
+        """
+
+        papers_to_add = list(self.collection.find(
+            {"_id": {"$in": dois},"analysis_result": None},
+            {"_id": 1, "openalex_id": 1}
+        ))
+            
+        total = len(papers_to_add)
         saved = 0
 
-        for paper in papers_to_analyze:
+        for paper in papers_to_add:
             doi = paper["_id"]
             openalex_id = paper["openalex_id"]
 
@@ -104,28 +135,61 @@ class MongoStore:
                     )
                     saved += 1
                 else:
-                    print(f"No analysis for {doi}")
+                    print(f"No analysis for DOI {doi}")
             except Exception as e:
-                 print(f"Error in Analysis for {doi}: {e}")
+                 print(f"Error in Analysis for DOI {doi}: {e}")
 
-        print("\n📊 Analysis of quinex :")
         print(f"\n📊 Successfully processed: {saved} of {total} DOIs")
 
-    def reset_quinex_result(self, dois: list[str]):
+    def reset_quinex_result(self, dois: list[str]) -> None:
+        """
+        Resets the 'analysis_result' field for the given DOIs to None.
+
+        Args:
+            dois (list[str]): List of DOIs to reset.
+        """
+
         result = self.collection.update_many(
             {"_id": {"$in": dois}},
             {"$set": {"analysis_result": None}}
         )
-        print(f"🔄 Zurückgesetzt: {result.modified_count} von {len(dois)} angefragten DOIs.")
+        print(f"🔄 Reset: {result.modified_count} of {len(dois)} requested DOIs.")
     
-    def get_collection(self, collection_name):
+    def get_papers_from_collection(self, df, collection_name: str) -> None:
+        """
+        Filters a DataFrame to include only DOIs already in the given collection.
+
+        Args:
+            df (DataFrame): DataFrame with a 'DOI' column.
+            collection_name (str): Name of the MongoDB collection.
+        """
+
+        dois_df = df['DOI'].dropna().unique().tolist()
+        existing_docs = self.db[collection_name].find({"_id": {"$in": dois_df}}, {"_id": 1})
+        existing_dois = {doc["_id"] for doc in existing_docs}
+        return df[df['DOI'].isin(existing_dois)]
+
+    
+    def get_collection(self, collection_name: str) -> List[dict[str, Any]]:
+        """
+        Retrieves all documents from a specified collection.
+
+        Args:
+            collection_name (str): Name of the MongoDB collection.
+        """
+
         doc = []
-        for i in self.db[collection_name].find():
-            doc.append(i)
+        for entry in self.db[collection_name].find():
+            doc.append(entry)
         return doc
 
 
-    def delete_collection(self, collection_name):
-        self.db[collection_name].drop()
+    def delete_collection(self, collection_name: str) -> None:
+        """
+        Deletes the specified collection from the MongoDB database.
 
-    
+        Args:
+            collection_name (str): Name of the MongoDB collection.
+        """
+
+        self.db[collection_name].drop()

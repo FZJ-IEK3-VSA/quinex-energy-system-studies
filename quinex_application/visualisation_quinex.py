@@ -73,7 +73,7 @@ class VisualisationQuinex():
 
         return records
     
-    def plot_top_values(self, df, column, top_n=10, ignore_empty=True):
+    def plot_top_values(self, df, column, top_n=10, ignore_empty=True, figsize=(5,3)):
         """
         Creates a bar plot of the top N most frequent quantitative properties.
 
@@ -91,7 +91,7 @@ class VisualisationQuinex():
 
         value_counts = data.value_counts().nlargest(top_n)
 
-        fig, ax = plt.subplots(figsize=(10, 6))
+        fig, ax = plt.subplots(figsize=figsize)
         sns.barplot(x=value_counts.values, y=value_counts.index, ax=ax, palette="dark:steelblue", hue=value_counts.index, legend=False)
 
         ax.set_xlabel("Count")

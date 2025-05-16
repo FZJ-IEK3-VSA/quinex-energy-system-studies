@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -13,6 +14,8 @@ class VisualisationQuinex():
         """
 
         pd.set_option('display.max_colwidth', None)
+
+    # ----------------------------------- Functions for Saving Analysis-----------------------------------------------------------
 
     def create_df(self, analysis):
         """
@@ -73,7 +76,39 @@ class VisualisationQuinex():
 
         return records
     
-    def plot_top_values(self, df, column, top_n=10, ignore_empty=True, figsize=(5,3)):
+    def save_df(self, df, path):
+        """
+        Saves the DataFrame to disk using pickle format.
+
+        Args:
+            df (pd.DataFrame): The DataFrame to save.
+            path (str): File path for saving.
+        """
+        df.to_pickle(path)
+        print(f"✅ DataFrame saved to '{path}'")
+
+    def load_df(self, path="df_quinex.pkl"):
+        """
+        Loads the DataFrame from disk.
+
+        Args:
+            path (str): File path of the saved DataFrame.
+
+        Returns:
+            pd.DataFrame: The loaded DataFrame.
+        """
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"No saved DataFrame found at '{path}'")
+
+        df = pd.read_pickle(path)
+        print(f"📂 Loaded DataFrame from '{path}' with {len(df)} rows")
+        return df
+
+
+
+    # ----------------------------------- Functions for Graphics-----------------------------------------------------------
+    
+    def plot_top_values(self, df, column, top_n=10, ignore_empty=True, figsize=(6,6)):
         """
         Creates a bar plot of the top N most frequent quantitative properties.
 
@@ -100,3 +135,65 @@ class VisualisationQuinex():
 
         plt.tight_layout()
         return fig
+    
+    def plot_top_properties_of_entity(self, df, entity_name, top_n=20, ignore_empty=True, figsize=(6,6)):
+        """
+        Plots the most frequent properties for a specific entity.
+
+        Args:
+            df (pd.DataFrame): The DataFrame containing the extracted data
+            entity_name (str): The entity for which to show property frequency.
+            top_n (int): Number of top properties to display.
+            ignore_empty (bool): Whether to exclude empty or null values.
+        """
+
+        df_entity = df[df["entity"] == entity_name]
+
+        if ignore_empty:
+            df_entity = df_entity.dropna(subset=["property"])
+            df_entity = df_entity[df_entity["property"].str.strip() != ""]  
+
+        # Count top properties
+        value_counts = df_entity["property"].value_counts().nlargest(top_n)
+
+        # Plot
+        fig, ax = plt.subplots(figsize=figsize)
+        sns.barplot(x=value_counts.values, y=value_counts.index, ax=ax, palette="dark:steelblue", hue=value_counts.index, legend=False)
+
+        ax.set_xlabel("Count")
+        ax.set_ylabel("Property")
+        ax.set_title(f"Top {top_n} properties for entity: '{entity_name}'")
+        plt.tight_layout()
+
+        return fig    
+
+    def plot_top_quantity_of_property(self, df, entity_name, property_name, top_n=20, ignore_empty=True, figsize=(6, 6)):
+        """
+        Plots the most frequent quantities for a specific (entity, property) combination.
+
+        Args:
+            df (pd.DataFrame): The DataFrame containing the extracted data.
+            entity_name (str): The entity to filter by.
+            property_name (str): The property to filter by.
+            top_n (int): Number of top quantities to display.
+            ignore_empty (bool): Whether to exclude empty or null values.
+            figsize (tuple): Size of the plot figure.
+
+        """
+        df_filtered = df[(df["entity"] == entity_name) & (df["property"] == property_name)]
+
+        if ignore_empty:
+            df_filtered = df_filtered.dropna(subset=["quantity"])
+            df_filtered = df_filtered[df_filtered["quantity"].astype(str).str.strip() != ""]
+
+        value_counts = df_filtered["quantity"].value_counts().nlargest(top_n)
+
+        fig, ax = plt.subplots(figsize=figsize)
+        sns.barplot(x=value_counts.values, y=value_counts.index, ax=ax, palette="dark:steelblue", hue=value_counts.index, legend=False)
+
+        ax.set_xlabel("Count")
+        ax.set_ylabel("Quantity")
+        ax.set_title(f"Top {top_n} quantities for '{property_name}' (entity: '{entity_name}')")
+        plt.tight_layout()
+
+        return fig, df_filtered

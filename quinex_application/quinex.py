@@ -116,7 +116,7 @@ class Quinex:
             number_of_gpus (int): Number of GPUs to use for processing.
             skip_imprecise_quantities (bool): Whether to skip imprecise quantities.
         """
-
+        print(papers_to_process)
         url_endpoint = f"bulk_analysis/{name}/process?skip_imprecise_quantities={skip_imprecise_quantities}&gpu_count={number_of_gpus}"
         return self.post_request(url_endpoint, json={"paper_ids": papers_to_process})
     
@@ -132,30 +132,28 @@ class Quinex:
         url_endpoint = f"bulk_analysis/{name}/papers/{paper_to_get}"
         return self.get_request(url_endpoint)
     
-    def get_request(self, url_endpoint: str, timeout: int=500):
+    def get_request(self, url_endpoint: str,):
         """
         Sends a GET request to the Quinex API.
 
         Args:
             url_endpoint (str): API endpoint path.
-            timeout (int): Timeout duration in seconds.
         """
         url = self.url_base + url_endpoint
-        response = requests.get(url, timeout=timeout)
+        response = requests.get(url,)
         return response.json()
     
-    def post_request(self, url_endpoint: str, timeout: int=500, **kwargs):
+    def post_request(self, url_endpoint: str, **kwargs):
         """
         Sends a POST request to the Quinex API.
 
         Args:
             url_endpoint (str): API endpoint path.
-            timeout (int): Timeout duration in seconds.
             **kwargs: Additional arguments for `requests.post`.
         """
 
         url = self.url_base + url_endpoint
-        response = requests.post(url, timeout=timeout, **kwargs)
+        response = requests.post(url, **kwargs)
         return response.json()
     
     def get_bibliographic_metadata(self, quinex_result):

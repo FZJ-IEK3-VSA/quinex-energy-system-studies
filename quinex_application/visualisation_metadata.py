@@ -4,7 +4,10 @@ import matplotlib.pyplot as plt
 class VisualisationMetadata():
     def __init__(self, df_path):
         pd.set_option('display.max_colwidth', None)
-        self.df = pd.read_csv(df_path)
+        self.df_path = df_path
+
+    def load_df(self):
+        self.df = pd.read_csv(self.df_path)
 
     def plot_bar(self, data, xlabel, ylabel, title, horizontal=True, figsize=(10,3)):
         fig, ax = plt.subplots(figsize=figsize)

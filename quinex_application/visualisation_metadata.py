@@ -6,8 +6,9 @@ class VisualisationMetadata():
         pd.set_option('display.max_colwidth', None)
         self.df_path = df_path
 
-    def load_df(self):
-        self.df = pd.read_csv(self.df_path)
+    def load_df(self, query, date):
+        self.df = pd.read_parquet(self.df_path)
+        self.df = self.df[self.df[f"{query}_{date}"] == True]
 
     def plot_bar(self, data, xlabel, ylabel, title, horizontal=True, figsize=(10,3)):
         fig, ax = plt.subplots(figsize=figsize)

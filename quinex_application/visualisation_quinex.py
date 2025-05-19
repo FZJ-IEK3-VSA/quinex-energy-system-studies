@@ -78,13 +78,13 @@ class VisualisationQuinex():
     
     def save_df(self, df, path):
         """
-        Saves the DataFrame to disk using pickle format.
+        Saves the DataFrame to disk using parquet format.
 
         Args:
             df (pd.DataFrame): The DataFrame to save.
             path (str): File path for saving.
         """
-        df.to_pickle(path)
+        df.to_parquet(path, index=False)
         print(f"✅ DataFrame saved to '{path}'")
 
     def load_df(self, path="df_quinex.pkl"):
@@ -100,7 +100,7 @@ class VisualisationQuinex():
         if not os.path.exists(path):
             raise FileNotFoundError(f"No saved DataFrame found at '{path}'")
 
-        df = pd.read_pickle(path)
+        df = pd.read_parquet(path)
         print(f"📂 Loaded DataFrame from '{path}' with {len(df)} rows")
         return df
 

@@ -1,7 +1,9 @@
 from datetime import datetime, UTC
 from typing import List, Any
-import sys
 from pymongo import MongoClient
+from tqdm import tqdm
+import pandas as pd
+import sys
 
 class MongoStore:
     """
@@ -140,6 +142,38 @@ class MongoStore:
                  print(f"Error in Analysis for DOI {doi}: {e}")
 
         print(f"\n📊 Successfully processed: {saved} of {total} DOIs")
+
+    def update_paper_parquet(self, collection_name, parquet_path, quinex_version, oeo_version):
+        """
+        Updates the paper parquet file by setting Quinex flags and versions for papers 
+        whose DOIs exist in the specified collection.
+
+        Args:
+            collection_name (str): Name of the MongoDB collection containing paper info.
+            parquet_path (str): File path to the parquet file to update.
+            quinex_version (str): Version string to set in 'Quinex_Version' column.
+            oeo_version (str): Version string to set in 'OEO_Version' column.
+        """
+        df = pd.read_parquet(parquet_path)
+        collection = self.get_collection(collection_name)
+    
+        # Build DOI list and map DOI -> quinex_id (openalex_id)
+        dois = [i["_id"] for i in collection]
+        doi_to_quinex_id = {i["_id"]: i.get("openalex_id") for i in collection}
+       
+        # Filter rows to update
+        mask = df['DOI'].isin(dois)
+
+        # Update DataFrame in one vectorized step
+        df.loc[mask, 'Quinex'] = True
+        df.loc[mask, 'Quinex_ID'] = df.loc[mask, 'DOI'].map(doi_to_quinex_id)
+        df.loc[mask, 'Quinex_Version'] = quinex_version
+        df.loc[mask, 'OEO_Version'] = oeo_version
+
+        df.to_parquet(parquet_path, index=False)
+
+        return df
+
 
     def reset_quinex_result(self, dois: list[str]) -> None:
         """

@@ -2,3 +2,4 @@
 /data/
 quinex_application/__pycache__/*
 notebooks/test.ipynb
+.env

@@ -26,7 +26,7 @@ class ProcessScopusData():
         self.quelle_name = quelle_name
         self.query_date = query_date
         self.df = None
-        self.additional_cols = ["Quinex", "Quinex_ID", "Quinex_Version", "Lizenz", "OEO_Version"]
+        self.additional_cols = ["Quinex", "Quinex_ID", "Quinex_Version", "Lizenz", "OEO_Version", "Download_Status"]
 
         self.parquet_df = self.load_parquet_if_exists()
 

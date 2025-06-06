@@ -106,7 +106,7 @@ class Quinex:
                 return paper["id"]
         return None
     
-    def perform_analyis(self, name: str, papers_to_process: list, number_of_gpus: int=1, skip_imprecise_quantities: bool=True):
+    def perform_analyis(self, name: str, papers_to_process: list, number_of_gpus: int=5, skip_imprecise_quantities: bool=True):
         """
         Starts the analysis process for selected paper IDs.
 
@@ -116,7 +116,7 @@ class Quinex:
             number_of_gpus (int): Number of GPUs to use for processing.
             skip_imprecise_quantities (bool): Whether to skip imprecise quantities.
         """
-        print(papers_to_process)
+    
         url_endpoint = f"bulk_analysis/{name}/process?skip_imprecise_quantities={skip_imprecise_quantities}&gpu_count={number_of_gpus}"
         return self.post_request(url_endpoint, json={"paper_ids": papers_to_process})
     

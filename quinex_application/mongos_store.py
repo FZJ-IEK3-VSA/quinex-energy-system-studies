@@ -1,7 +1,6 @@
 from datetime import datetime, UTC
 from typing import List, Any
 from pymongo import MongoClient
-from tqdm import tqdm
 import pandas as pd
 import sys
 
@@ -40,10 +39,16 @@ class MongoStore:
         added = already_existing = failed = 0
 
         for i, doi in enumerate(df_doi["DOI"], 1):
-            result = self.quinex.add_doi(name, doi)
+            try:
+                result = self.quinex.add_doi(name, doi)
+            except Exception as e:
+                print(f"❌ Error when adding {doi}: {e}")
+                
             paper_id = self.quinex.get_paper_id_by_doi(name, doi)
-
             if paper_id:
+                # Remove from self.failed_collection if existing
+                self.failed_collection.delete_one({"_id": doi})
+
                 result = self.collection.update_one(
                     {"_id": doi},
                     {
@@ -72,9 +77,7 @@ class MongoStore:
                 
                 failed += 1
 
-            sys.stdout.write(
-            f"\rVerarbeitet: {i}/{attempted} | ✅ Neu: {added} | 🔁 Vorhanden: {already_existing} | ❌ Fehlgeschlagen: {failed}"
-            )
+            sys.stdout.write(f"\rVerarbeitet: {i}/{attempted} | ✅ Neu: {added} | 🔁 Vorhanden: {already_existing} | ❌ Fehlgeschlagen: {failed}")
             sys.stdout.flush()
         
         print()
@@ -156,19 +159,26 @@ class MongoStore:
         """
         df = pd.read_parquet(parquet_path)
         collection = self.get_collection(collection_name)
+        failed_collection = self.get_collection("failed_papers")
+
+        success_dois = {doc["_id"] for doc in collection}
+        failed_dois = {doc["_id"] for doc in failed_collection}
+        failed_dois -= success_dois
     
-        # Build DOI list and map DOI -> quinex_id (openalex_id)
-        dois = [i["_id"] for i in collection]
         doi_to_quinex_id = {i["_id"]: i.get("openalex_id") for i in collection}
        
         # Filter rows to update
-        mask = df['DOI'].isin(dois)
+        mask = df['DOI'].isin(success_dois)
 
         # Update DataFrame in one vectorized step
         df.loc[mask, 'Quinex'] = True
         df.loc[mask, 'Quinex_ID'] = df.loc[mask, 'DOI'].map(doi_to_quinex_id)
         df.loc[mask, 'Quinex_Version'] = quinex_version
         df.loc[mask, 'OEO_Version'] = oeo_version
+        df.loc[mask, 'Download_Status'] = "Succeeded"
+
+        failed_mask = df['DOI'].isin(failed_dois)
+        df.loc[failed_mask, 'Download_Status'] = "Failed"
 
         df.to_parquet(parquet_path, index=False)
 

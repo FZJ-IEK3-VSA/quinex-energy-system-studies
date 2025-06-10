@@ -1,4 +1,5 @@
 import pandas as pd
+import os
 from pathlib import Path
 
 class ProcessScopusData():
@@ -32,18 +33,39 @@ class ProcessScopusData():
 
     def combine_csvs(self, sort_by_year=True):
         """
-        Reads and concatenates all CSV files, removes duplicates,
+        Reads and concatenates all CSV and Excel files, removes duplicates,
         adds boolean columns marking the source and query date,
         and ensures additional columns are present.
 
         Args:
             sort_by_year (bool, optional): _description_. Defaults to True.
         """
+        ext = os.path.splitext(self.csvs_paths[0])[-1].lower()
+        if ext == '.csv':
+            dfs = [pd.read_csv(path) for path in self.csvs_paths]
+        elif ext in ['.xls', '.xlsx']:
+            dfs = [pd.read_excel(path) for path in self.csvs_paths]
+        else:
+            raise ValueError(f"Unsupported file type: {self.csvs_paths}. Only .csv, .xls, and .xlsx are supported.")
 
-        dfs = [pd.read_csv(path) for path in self.csvs_paths]
 
         # Concatenate CSVs and remove duplicate rows
         self.df = pd.concat(dfs, ignore_index=True).drop_duplicates()
+
+        if self.quelle_name == "Source: WOS":
+            rename_map = {
+                'Publication Year': 'Year',
+                'Source Title': 'Source title',
+                'Times Cited, All Databases': 'Cited by',
+                'DOI': 'DOI',
+                'DOI Link': 'Link',
+                'Open Access Designations': 'Open Access'
+            }
+            columns_to_keep = [col for col in rename_map if col in self.df.columns]
+            self.df = self.df[columns_to_keep].rename(columns={k: rename_map[k] for k in columns_to_keep})
+            # No Link in WOS
+            self.df["Link"] = pd.NA
+
 
         # Optionally sort by 'Year' column ascending
         if sort_by_year and "Year" in self.df.columns:
@@ -117,7 +139,6 @@ class ProcessScopusData():
         self.parquet_df = self.parquet_df.fillna(pd.NA)
         return self.parquet_df
     
-    
     def get_new_dois_and_rows(self):
         """
         Appends new rows with DOIs not yet in the parquet.
@@ -131,18 +152,19 @@ class ProcessScopusData():
         Updates all 'Query:' columns with True/False depending on presence in df/parquet.
         """
         query_cols = [col for col in df_updated.columns if 'Query:' in col]
-        dois_in_df = set(self.df["DOI"])
-        dois_in_parquet = set(self.parquet_df["DOI"])
 
         for col in query_cols:
             if col in self.df.columns:
+                dois_in_df = set(self.df[self.df[col] == True]["DOI"])
                 df_updated[col] = df_updated["DOI"].apply(lambda doi: doi in dois_in_df)
             elif col in self.parquet_df.columns:
+                dois_in_parquet = set(self.parquet_df[self.parquet_df[col] == True]["DOI"])
                 df_updated[col] = df_updated["DOI"].apply(lambda doi: doi in dois_in_parquet)
             else:
                 df_updated[col] = False
 
         return df_updated
+
 
     def _update_source_columns(self, df_updated):
         """

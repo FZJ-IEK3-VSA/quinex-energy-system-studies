@@ -84,13 +84,14 @@ class MongoStore:
         total = self.collection.count_documents({})
         print(f"📚 Total DOIs currently stored: {total}")
 
-    def process_paper(self, name: str, dois: list[str]) -> None:
+    def process_paper(self, name: str, dois: list[str], number_of_gpus: int = 5) -> None:
         """
         Performs analysis on papers with missing analysis results.
 
         Args:
             name (str): Project name for Quinex context.
             dois (list[str]): List of DOIs to analyze.
+            number_of_gpus (int): Number of GPUs to use for processing.
         """
 
         papers_to_analyze = list(self.collection.find(
@@ -105,7 +106,7 @@ class MongoStore:
         paper_ids = [p["openalex_id"] for p in papers_to_analyze]
         
         try:
-            result = self.quinex.perform_analyis(name, paper_ids)
+            result = self.quinex.perform_analyis(name, paper_ids, number_of_gpus)
             print(f"✅ Analysis finished: {result}")
         except Exception as e:
             print(f"❌ Error when performing quinex: {e}")
@@ -162,6 +163,7 @@ class MongoStore:
         failed_collection = self.get_collection("failed_papers")
 
         success_dois = {doc["_id"] for doc in collection}
+        print(len(success_dois))
         failed_dois = {doc["_id"] for doc in failed_collection}
         failed_dois -= success_dois
     

@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import numpy as np
 
 class VisualisationQuinex():
     """
@@ -41,7 +42,9 @@ class VisualisationQuinex():
             statements = result.get("annotations", {}).get("quantitative_statements", [])
 
             for self.stm in statements:
-                records.extend(self.parse_statement())
+                record = self.parse_statement()
+                if record is not False:
+                    records.extend(record)
      
         return pd.DataFrame(records)
 
@@ -62,19 +65,43 @@ class VisualisationQuinex():
         quantity_modifier = [q["value"]["normalized"]["modifiers"] for q in claim.get("quantity", {}).get("normalized", {}).get("individual_quantities", {}).get("normalized", [])]
         quantity = claim.get("quantity", {}).get("text", "")
         combined_quantity = f"{", ".join(set(quantity_modifier))} {quantity}".strip()
+        quantity_type = claim.get("quantity", {}).get("normalized", {}).get("type", {}).get("class", "")
 
-        unit = claim.get("quantity", {}).get("normalized", {}).get("individual_quantities", {}).get("normalized", [])
+        quantity_normalized = claim.get("quantity", {}).get("normalized", {}).get("individual_quantities", {}).get("normalized", [])
 
-        units = [n for u in unit for n in u.get("unit", {}).get("normalized", [])]
-        combined_unit = [{"uri": u.get("uri"), "exponent": u.get("exponent"), "year": u.get("year")} for u in units]
+        if any(
+            u.get("value", {}).get("normalized", {}).get("numeric_value", None) is None
+            for u in quantity_normalized
+        ):
+            combined_quantity_list = []
+        else:
+            combined_quantity_list = [
+                {
+                    "value": u.get("value", {}).get("normalized", {}).get("numeric_value", None),
+                    "unit": [
+                        {"unit_uri": n.get("uri"), "exponent": n.get("exponent"), "year": n.get("year")}
+                        for n in u.get("unit", {}).get("normalized", [])
+                    ] or [{"unit_uri": "http://qudt.org/vocab/unit/UNITLESS", "exponent": None, "year": None}],
+                    "modifier": u.get("value", {}).get("normalized", {}).get("modifiers", None)
+                }
+                for u in quantity_normalized
+            ]
+
+        max_safe_int = 2**53 - 1
+        if any(isinstance(e["value"], int) and abs(e["value"]) > max_safe_int for e in combined_quantity_list):
+            print(f"⚠️  Maxed integer number achieved for DOI: {self.doi}")
+            return False
+
+        quantity_normalized = {"type": quantity_type, "quantities": combined_quantity_list} if combined_quantity_list != [] else {"type": "literal", "quantities": []}
+
         text_quote = self.get_quote()
 
         records.append({
             "paper_id": self.doi,
             "entity": entity,
             "property": prop,
-            "quantity": combined_quantity,
-            "unit": combined_unit,
+            "quantity_text": combined_quantity,
+            "quantity_normalized": quantity_normalized,
             "quote": text_quote,
             "temporal_scope_text": temporal,
             "spatial_scope_text": spatial,
@@ -166,7 +193,7 @@ class VisualisationQuinex():
 
     # ----------------------------------- Functions for Graphics-----------------------------------------------------------
     
-    def plot_top_values(self, df, column, top_n=10, ignore_empty=True, match_column=None, score_column=None, score_limit=0.8, figsize=(6,6)):
+    def plot_top_values(self, df, column, top_n=10, ignore_empty=True, match_column=None, score_column=None, score_limit=0.8, figsize=(6,6), title=None):
         """
         Creates a bar plot of the top N most frequent values.
         If match_column and score_column are provided, values from match_column
@@ -181,6 +208,7 @@ class VisualisationQuinex():
             score_column (str): Column with match scores (e.g., 'match_score').
             score_limit (float): Threshold above which the match_column is used.
             figsize (tuple): Size of the figure.
+            title (str): The title of the plot.
         """
 
         if match_column and score_column:
@@ -196,7 +224,7 @@ class VisualisationQuinex():
         if ignore_empty:
             data = data.dropna()
 
-        return self.plot_top_values_cleaned(data, column, top_n=top_n, figsize=figsize)
+        return self.plot_top_values_cleaned(data, column, top_n=top_n, figsize=figsize, title=title)
 
     
     def plot_top_properties_of_entity(self, df, entity_name, top_n=20, ignore_empty=True, figsize=(6,6)):

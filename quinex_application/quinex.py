@@ -119,6 +119,17 @@ class Quinex:
     
         url_endpoint = f"bulk_analysis/{name}/process?skip_imprecise_quantities={skip_imprecise_quantities}&gpu_count={number_of_gpus}"
         return self.post_request(url_endpoint, json={"paper_ids": papers_to_process})
+
+    def rerun_normalizations(self, name: str, papers_to_process: list):
+        """
+        Rerun the normalization of the analys process for selected paper IDs.
+
+        Args:
+            name (str): Name of the analysis session.
+            papers_to_process (list): List of paper IDs to process.
+        """
+        url_endpoint = f"bulk_analysis/{name}/rerun_normalizations"
+        return self.post_request(url_endpoint, json={"paper_ids": papers_to_process})
     
     def get_analysis(self, name: str, paper_to_get: str):
         """

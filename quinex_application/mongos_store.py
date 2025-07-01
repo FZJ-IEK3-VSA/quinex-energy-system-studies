@@ -111,6 +111,27 @@ class MongoStore:
         except Exception as e:
             print(f"❌ Error when performing quinex: {e}")
 
+    def rerun_normalizations(self, name: str, dois: list[str]) -> None:
+        """
+        Reruns normalizations on papers with failed normalization
+
+        Args:
+            name (str): Project name for Quinex context.
+            dois (list[str]): List of DOIs to analyze.
+        """
+
+        papers_to_rerun = list(self.collection.find(
+            {"_id": {"$in": dois},"analysis_result": None},
+            {"_id": 1, "openalex_id": 1}
+        ))
+        paper_ids = [p["openalex_id"] for p in papers_to_rerun]
+
+        try:
+            result = self.quinex.rerun_normalizations(name, paper_ids)
+            print(f"✅ Rerun finished: {result}")
+        except Exception as e:
+            print(f"❌ Error when rerunning normalizations: {e}")
+
     def add_analysis(self, name: str, dois: list[str]) -> None:
         """
         Fetches analysis results from Quinex and stores them in the database.

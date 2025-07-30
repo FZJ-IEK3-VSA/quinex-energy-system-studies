@@ -4,30 +4,33 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import numpy as np
 
-class VisualisationQuinex():
+class QuinexPostprocessing():
     """
-    Visualises the results observed using quinex.
+    Postprocesses the results observed using quinex.
     """
     
     def __init__(self):
         """
-        Initializes the visualisation client.
+        Initializes the postprocessing client.
         """
 
         pd.set_option('display.max_colwidth', None)
 
     # ----------------------------------- Functions for Saving Analysis-----------------------------------------------------------
 
-    def create_df(self, analysis):
+    def create_df(self, analysis, publication_year):
         """
         Transforms a Quinex analysis result into a structured pandas DataFrame.
 
         Args:
             analysis (list): List of analysis results (typically JSON-like dicts) per paper.
+            publication_year (int). Year for which the publication was found in Scopus/WOS.
 
         Returns:
             pd.DataFrame: A DataFrame with extracted quantitative statements and qualifiers.
         """
+
+        self.year = publication_year
         records = []
 
         for paper in analysis:
@@ -39,14 +42,15 @@ class VisualisationQuinex():
                 continue
 
             self.text = result["text"]
+
             statements = result.get("annotations", {}).get("quantitative_statements", [])
 
             for self.stm in statements:
                 record = self.parse_statement()
                 if record is not False:
                     records.extend(record)
-     
-        return pd.DataFrame(records)
+        df = pd.DataFrame(records)
+        return df.convert_dtypes()
 
     def parse_statement(self):
         """
@@ -56,11 +60,23 @@ class VisualisationQuinex():
         records = []
         claim = self.stm.get("claim", {})
         qualifiers = self.stm.get("qualifiers", {})
+        statement_classification = self.stm.get("statement_classification", {})
+
 
         entity = claim.get("entity", {}).get("text", "")
         prop = claim.get("property", {}).get("text", "")
-        temporal = qualifiers.get("temporal_scope", {}).get("text", "")
-        spatial = qualifiers.get("spatial_scope", {}).get("text", "")
+
+        temporal_scope = qualifiers.get("temporal_scope", {}).get("normalized", {})
+        temporal = {"year": temporal_scope.get("year", pd.NA)} if temporal_scope.get("year", pd.NA) else pd.NA
+
+        spatial_scope = qualifiers.get("spatial_scope", {}).get("normalized", {})
+        spatial = {"country": spatial_scope.get("country", pd.NA), "latitude": spatial_scope.get("latitude", pd.NA), "longitude": spatial_scope.get("longitude", pd.NA)} if spatial_scope.get("latitude", pd.NA) and spatial_scope.get("longitude", pd.NA)  else pd.NA
+        
+        classification = {
+            "type": statement_classification.get("type", {}).get("class", pd.NA),
+            "rational": statement_classification.get("rational", {}).get("class", pd.NA),
+            "system": statement_classification.get("system", {}).get("class", pd.NA),
+        }
 
         quantity_modifier = [q["value"]["normalized"]["modifiers"] for q in claim.get("quantity", {}).get("normalized", {}).get("individual_quantities", {}).get("normalized", [])]
         quantity = claim.get("quantity", {}).get("text", "")
@@ -70,19 +86,19 @@ class VisualisationQuinex():
         quantity_normalized = claim.get("quantity", {}).get("normalized", {}).get("individual_quantities", {}).get("normalized", [])
 
         if any(
-            u.get("value", {}).get("normalized", {}).get("numeric_value", None) is None
+            u.get("value", {}).get("normalized", {}).get("numeric_value", pd.NA) is pd.NA
             for u in quantity_normalized
         ):
             combined_quantity_list = []
         else:
             combined_quantity_list = [
                 {
-                    "value": u.get("value", {}).get("normalized", {}).get("numeric_value", None),
+                    "value": u.get("value", {}).get("normalized", {}).get("numeric_value", pd.NA),
                     "unit": [
                         {"unit_uri": n.get("uri"), "exponent": n.get("exponent"), "year": n.get("year")}
                         for n in u.get("unit", {}).get("normalized", [])
-                    ] or [{"unit_uri": "http://qudt.org/vocab/unit/UNITLESS", "exponent": None, "year": None}],
-                    "modifier": u.get("value", {}).get("normalized", {}).get("modifiers", None)
+                    ] or [{"unit_uri": "http://qudt.org/vocab/unit/UNITLESS", "exponent": pd.NA, "year": pd.NA}],
+                    "modifier": u.get("value", {}).get("normalized", {}).get("modifiers", pd.NA)
                 }
                 for u in quantity_normalized
             ]
@@ -94,17 +110,36 @@ class VisualisationQuinex():
 
         quantity_normalized = {"type": quantity_type, "quantities": combined_quantity_list} if combined_quantity_list != [] else {"type": "literal", "quantities": []}
 
+        numeric_values = [e["value"] for e in combined_quantity_list if isinstance(e["value"], (int, float))]
+        value = pd.NA if not numeric_values else numeric_values[0] if len(numeric_values) == 1 else sum(numeric_values) / len(numeric_values)
+        
+        units = (combined_quantity_list[0].get("unit") if combined_quantity_list else []) or [{"unit_uri": "http://qudt.org/vocab/unit/UNITLESS", "exponent": pd.NA}]
+        unit = " / ".join(filter(None, [
+            " * ".join(
+                f"{u['unit_uri']}" if u.get("exponent") == 1 else f"{u['unit_uri']}^{u['exponent']}"
+                for u in units if isinstance(u.get("exponent"), int) and u["exponent"] > 0
+            ),
+            " * ".join(
+                f"{u['unit_uri']}" if abs(u.get("exponent", 0)) == 1 else f"{u['unit_uri']}^{abs(u['exponent'])}"
+                for u in units if isinstance(u.get("exponent"), int) and u["exponent"] < 0
+            )
+        ])) or units[0]["unit_uri"]
+
         text_quote = self.get_quote()
 
         records.append({
+            "publication_year": self.year,
             "paper_id": self.doi,
+            "classification": classification,
             "entity": entity,
             "property": prop,
             "quantity_text": combined_quantity,
+            "value_normalized": value,
+            "unit_normalized": unit,
             "quantity_normalized": quantity_normalized,
             "quote": text_quote,
-            "temporal_scope_text": temporal,
-            "spatial_scope_text": spatial,
+            "temporal_scope": temporal,
+            "spatial_scope": spatial,
         })
         return records
     

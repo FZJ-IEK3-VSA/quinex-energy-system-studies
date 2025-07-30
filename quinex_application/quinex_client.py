@@ -2,7 +2,7 @@ import requests
 import os 
 import re
 
-class Quinex:
+class QuinexClient:
     """
     API wrapper for interacting with the Quinex bulk analysis service.
     Provides functionality to submit DOIs, PDFs, and retrieve analysis results.

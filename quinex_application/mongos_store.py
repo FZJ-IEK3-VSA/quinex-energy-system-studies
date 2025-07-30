@@ -164,7 +164,7 @@ class MongoStore:
                 else:
                     print(f"No analysis for DOI {doi}")
             except Exception as e:
-                 print(f"Error in Analysis for DOI {doi}: {e}")
+                print(f"Error in Analysis for DOI {doi}: {e}")
 
         print(f"\n📊 Successfully processed: {saved} of {total} DOIs")
 
@@ -222,17 +222,24 @@ class MongoStore:
         )
         print(f"🔄 Reset: {result.modified_count} of {len(dois)} requested DOIs.")
     
-    def get_papers_from_collection(self, df, collection_name: str) -> None:
+    def get_papers_from_collection(self, df, collection_name: str, only_without_analysis: bool = False) -> None:
         """
         Filters a DataFrame to include only DOIs already in the given collection.
 
         Args:
             df (DataFrame): DataFrame with a 'DOI' column.
             collection_name (str): Name of the MongoDB collection.
+            only_without_analysis (bool): If True, only include DOIs with no 'analysis_result' field.
         """
 
         dois_df = df['DOI'].dropna().unique().tolist()
-        existing_docs = self.db[collection_name].find({"_id": {"$in": dois_df}}, {"_id": 1})
+
+        # MongoDB-Query aufbauen
+        query = {"_id": {"$in": dois_df}}
+        if only_without_analysis:
+            query["analysis_result.annotations.quantitative_statements"] = {"$exists": False}
+
+        existing_docs = self.db[collection_name].find(query, {"_id": 1})
         existing_dois = {doc["_id"] for doc in existing_docs}
         return df[df['DOI'].isin(existing_dois)]
 

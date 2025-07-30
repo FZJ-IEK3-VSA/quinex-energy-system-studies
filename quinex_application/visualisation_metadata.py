@@ -1,22 +1,29 @@
 import pandas as pd
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 class VisualisationMetadata():
     def __init__(self, df_path):
         pd.set_option('display.max_colwidth', None)
         self.df_path = df_path
+        sns.set(style="whitegrid")
+        self.color = sns.color_palette("dark:steelblue", 6)[2]
+        self.color2 = sns.color_palette("dark:cyan", 6)[2]
+
 
     def load_df(self, query, date):
         self.df = pd.read_parquet(self.df_path)
         self.df = self.df[self.df[f"{query}_{date}"] == True]
 
+
     def plot_bar(self, data, xlabel, ylabel, title, horizontal=True, figsize=(10,3)):
         fig, ax = plt.subplots(figsize=figsize)
+
         if horizontal:
-            data.plot(kind='barh', ax=ax, color='steelblue')
-            ax.invert_yaxis()
+            sns.barplot(x=data.values, y=data.index, ax=ax, color=self.color)
         else:
-            data.plot(kind='bar', ax=ax, color='steelblue')
+            sns.barplot(x=data.index, y=data.values, ax=ax, color=self.color)
+
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         ax.set_title(title)
@@ -25,7 +32,8 @@ class VisualisationMetadata():
     
     def plot_line(self, data, xlabel, ylabel, title, marker='o', figsize=(10,3)):
         fig, ax = plt.subplots(figsize=figsize)
-        data.plot(kind='line', ax=ax, marker=marker, color="steelblue")
+        sns.lineplot(x=data.index, y=data.values, ax=ax, marker=marker, color=self.color)
+
         ax.set_xlabel(xlabel)
         ax.set_ylabel(ylabel)
         ax.set_title(title)
@@ -37,21 +45,19 @@ class VisualisationMetadata():
         fig, ax1 = plt.subplots(figsize=figsize)
         
         # Linke Achse
-        ax1.bar(data_left.index, data_left.values, color='steelblue', alpha=0.6)
+        sns.barplot(x=data_left.index, y=data_left.values, ax=ax1, color=self.color, alpha=0.6)
         ax1.set_xlabel(xlabel)
-        ax1.set_ylabel(ylabel_left, color='steelblue')
-        ax1.tick_params(axis='y', labelcolor='steelblue')
+        ax1.set_ylabel(ylabel_left, color=self.color)
+        ax1.tick_params(axis='y', labelcolor=self.color)
 
         # Rechte Achse
         ax2 = ax1.twinx()
-        ax2.plot(data_right.index, data_right.values, color='darkcyan', marker='o', linewidth=2)
-        ax2.set_ylabel(ylabel_right, color='darkcyan')
-        ax2.tick_params(axis='y', labelcolor='darkcyan')
+        sns.lineplot(x=data_right.index, y=data_right.values, ax=ax2, color=self.color2, marker='o', linewidth=2)
+        ax2.set_ylabel(ylabel_right, color=self.color2)
+        ax2.tick_params(axis='y', labelcolor=self.color2)
 
-        ax1.set_xticks(data_left.index)
+        ax1.set_xticks(range(len(data_left.index)))
         ax1.set_xticklabels([int(year) for year in data_left.index], rotation=45)
-        ax1.get_xaxis().set_major_formatter(plt.FuncFormatter(lambda x, _: f'{int(x)}'))
-
         plt.title(title)
         fig.tight_layout()
         return fig

@@ -1,8 +1,5 @@
 import os
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-import numpy as np
 
 class QuinexPostprocessing():
     """
@@ -18,21 +15,21 @@ class QuinexPostprocessing():
 
     # ----------------------------------- Functions for Saving Analysis-----------------------------------------------------------
 
-    def create_df(self, analysis, publication_year):
+    def create_information_df(self, analysis, meta_df):
         """
         Transforms a Quinex analysis result into a structured pandas DataFrame.
 
         Args:
             analysis (list): List of analysis results (typically JSON-like dicts) per paper.
-            publication_year (int). Year for which the publication was found in Scopus/WOS.
+            meta_df (pd.DataFrame): DataFrame with at least columns ["DOI", "Year"].
 
         Returns:
             pd.DataFrame: A DataFrame with extracted quantitative statements and qualifiers.
         """
 
-        self.year = publication_year
         records = []
 
+        year_lookup = dict(zip(meta_df["DOI"], meta_df["Year"]))
         for paper in analysis:
             self.doi = paper.get("_id")
             result = paper.get("analysis_result")
@@ -42,7 +39,9 @@ class QuinexPostprocessing():
                 continue
 
             self.text = result["text"]
-
+            
+            self.year = year_lookup.get(self.doi)
+       
             statements = result.get("annotations", {}).get("quantitative_statements", [])
 
             for self.stm in statements:
@@ -176,6 +175,66 @@ class QuinexPostprocessing():
             self.text[first_sent_start_before_ann:first_sent_end_after_ann].removeprefix(".").strip()
         )
         return text_quote
+    
+    def create_metadata_df(self, analysis, meta_df):
+        """
+        Transforms a Quinex analysis result into a structured pandas DataFrame.
+
+        Args:
+            analysis (list): List of analysis results (typically JSON-like dicts) per paper.
+            meta_df (pd.DataFrame): DataFrame with at least columns ["DOI", "Year"].
+
+        Returns:
+            pd.DataFrame: A DataFrame with metadata, including journal and country.
+        """
+        records = []
+
+        year_lookup = dict(zip(meta_df["DOI"], meta_df["Year"]))
+        for paper in analysis:
+            self.doi = paper.get("_id")
+            self.year = year_lookup.get(self.doi)
+
+            result = paper.get("analysis_result")
+            if not result:
+                print(f"⚠️  No analysis result for DOI: {self.doi}")
+                continue
+
+            metadata = result.get("metadata", {}).get("bibliographic", {})
+
+            authorship = metadata.get("authorships", [])
+            countries = []
+            for a in authorship:
+                for c in a['countries']:
+                    if c not in countries:
+                        countries.append(c)
+
+            topics = metadata.get("topics", [])
+            topic = []
+            for t in topics:
+                topic_name = t.get("display_name", "")
+                topic.append(topic_name)
+
+            concepts = metadata.get("concepts", [])
+            concept = []
+            for c in concepts:
+                concept_name = c.get("display_name", "")
+                concept.append(concept_name)
+
+            source = metadata.get("primary_location", {}).get("source", {}).get("display_name", "")
+            host_organization = metadata.get("primary_location", {}).get("source", {}).get("host_organization_name", "")
+
+            records.append({
+                "publication_year": self.year,
+                "paper_id": self.doi,
+                "countries": countries,
+                "topics": topic,
+                "concepts": concept,
+                "source": source,
+                "host organization": host_organization
+            })
+
+        df = pd.DataFrame(records)
+        return df.convert_dtypes()
 
     
     def save_df(self, df, path):
@@ -223,191 +282,3 @@ class QuinexPostprocessing():
         df = pd.read_parquet(path)
         print(f"📂 Loaded DataFrame from '{path}' with {len(df)} rows")
         return df
-
-
-
-    # ----------------------------------- Functions for Graphics-----------------------------------------------------------
-    
-    def plot_top_values(self, df, column, top_n=10, ignore_empty=True, match_column=None, score_column=None, score_limit=0.8, figsize=(6,6), title=None):
-        """
-        Creates a bar plot of the top N most frequent values.
-        If match_column and score_column are provided, values from match_column
-        are used only when score_column >= score_limit, otherwise fallback to `column`.
-
-        Args:
-            df (pd.DataFrame): The DataFrame containing the data.
-            column (str): The original column name (e.g., 'entity').
-            top_n (int): Number of top values to display.
-            ignore_empty (bool): Whether to exclude empty or null values.
-            match_column (str): Column with matched values (e.g., 'best_oeo_match').
-            score_column (str): Column with match scores (e.g., 'match_score').
-            score_limit (float): Threshold above which the match_column is used.
-            figsize (tuple): Size of the figure.
-            title (str): The title of the plot.
-        """
-
-        if match_column and score_column:
-            # Kombinieren: matched value falls score >= limit, sonst original
-            data = df.apply(
-                lambda row: row[match_column] if pd.notna(row[score_column]) and row[score_column] >= score_limit else row[column],
-                axis=1
-            )
-            column = "entity_levenshtein"
-        else:
-            data = df[column]
-
-        if ignore_empty:
-            data = data.dropna()
-
-        return self.plot_top_values_cleaned(data, column, top_n=top_n, figsize=figsize, title=title)
-
-    
-    def plot_top_properties_of_entity(self, df, entity_name, top_n=20, ignore_empty=True, figsize=(6,6)):
-        """
-        Plots the most frequent properties for a specific entity.
-
-        Args:
-            df (pd.DataFrame): The DataFrame containing the extracted data
-            entity_name (str): The entity for which to show property frequency.
-            top_n (int): Number of top properties to display.
-            ignore_empty (bool): Whether to exclude empty or null values.
-        """
-
-        df_entity = df[df["entity"] == entity_name]
-        data = df_entity["property"]
-        if ignore_empty:
-            data = data.dropna()
-
-        return self.plot_top_values_cleaned(data, "property", top_n=top_n, figsize=figsize, title=f"Top {top_n} properties for entity: '{entity_name}'") 
-
-    def plot_top_quantity_of_property(self, df, entity_name, property_name, top_n=20, ignore_empty=True, figsize=(6, 6)):
-        """
-        Plots the most frequent quantities for a specific (entity, property) combination.
-
-        Args:
-            df (pd.DataFrame): The DataFrame containing the extracted data.
-            entity_name (str): The entity to filter by.
-            property_name (str): The property to filter by.
-            top_n (int): Number of top quantities to display.
-            ignore_empty (bool): Whether to exclude empty or null values.
-            figsize (tuple): Size of the plot figure.
-
-        """
-        df_filtered = df[(df["entity"] == entity_name) & (df["property"] == property_name)]
-        data = df_filtered["quantity"]
-        if ignore_empty:
-            data = data.dropna()
-        return self.plot_top_values_cleaned(data, "quantity", top_n=top_n, figsize=figsize, title=f"Top {top_n} quantities for '{property_name}' (entity: '{entity_name}')")
-    
-    def plot_top_values_cleaned(self, data, column_name, top_n=10, figsize=(6, 6), title=None):
-        """
-        Creates an adjusted bar plot for the most frequent values in a column.
-
-        Args:
-            data (pd.Series): The column to be analyzed.
-            column_name (str): Name of the column.
-            top_n (int): Number of top values.
-            figsize (tuple): Size of the plot figure.
-            title (str): Optional plot title.
-        """
-
-        # Alle Werte zu String machen und bereinigen
-        cleaned_data = (
-            data.astype(str)
-            .str.replace(r"\s+", " ", regex=True)
-            .str.strip()
-        )
-        cleaned_data = cleaned_data[cleaned_data != ""]  # Leere rausfiltern
-
-        # Top-N-Werte zählen
-        value_counts = cleaned_data.value_counts().nlargest(top_n)
-
-        # Plot erstellen
-        fig, ax = plt.subplots(figsize=figsize)
-        sns.barplot(x=value_counts.values, y=value_counts.index, ax=ax, palette="dark:steelblue", hue=value_counts.index, legend=False)
-
-        ax.set_xlabel("Count")
-        ax.set_ylabel(column_name.capitalize())
-        ax.set_title(title if title else f"Top {top_n} values in '{column_name}'")
-        plt.tight_layout()
-        return fig
-    
-    def plot_levenshtein_score_limits(self, file_path, score_limits, match_score_column='match_score', figsize=(6, 6)):
-        """
-        Plots the number of DOIs with match_score >= given score_limits.
-
-        Args:
-            file_path (str): Path to the single .parquet file containing all results.
-            score_limits (list[float]): List of score limits to evaluate.
-            match_score_column (str): Column name that contains the match score.
-            figsize (tuple): Size of the output figure.
-        """
-
-        df = pd.read_parquet(file_path)
-
-        results = []
-        for score_limit in score_limits:
-            count = len(df[df[match_score_column] >= score_limit])
-            results.append({
-                'score_limit': score_limit,
-                'doi_count': count
-            })
-
-        df_results = pd.DataFrame(results).sort_values(by='score_limit')
-
-        # Plot
-        plt.figure(figsize=figsize)
-        plt.plot(df_results['score_limit'], df_results['doi_count'], marker='o')
-        plt.xlabel('Score-Limit')
-        plt.ylabel('Number of DOIs with match_score ≥ Score-Limit')
-        plt.title('Levenshtein-Matches over the Score-Limits')
-        plt.grid(True)
-        plt.tight_layout()
-        plt.show()
-
-    def plot_unique_entities_over_score_limits(self, file_path, score_limits, column='entity', match_column='best_oeo_match', score_column='match_score', figsize=(6, 6)):
-        """
-        Plots the number of unique entities before and after Levenshtein matching,
-        over different score limits.
-
-        Args:
-            file_path (str): Path to the single .parquet file containing all results.
-            column (str): Original entity column.
-            match_column (str): Column with Levenshtein matches.
-            score_column (str): Column with match scores.
-            score_limits (list): List of score thresholds.
-            figsize (tuple): Figure size for the plot.
-        """
-        df = pd.read_parquet(file_path)
-        original_count = df[column].dropna().nunique()
-
-        results = []
-        for limit in score_limits:
-            # Kombiniertes Feld: matched value falls score ≥ limit, sonst original
-            merged_series = df.apply(
-                lambda row: row[match_column] if pd.notna(row[score_column]) and row[score_column] >= limit else row[column],
-                axis=1
-            )
-            unique_count = merged_series.dropna().nunique()
-
-            results.append({
-                'score_limit': limit,
-                'unique_entities_after_matching': unique_count
-            })
-
-        # Plot
-        limits = [r['score_limit'] for r in results]
-        matched_counts = [r['unique_entities_after_matching'] for r in results]
-
-        plt.figure(figsize=figsize)
-        plt.plot(limits, matched_counts, marker='o', label='After Matching')
-        plt.axhline(original_count, color='steelblue', linestyle='--', label='Original (without Matching)')
-        
-        plt.title("Comparison: Number of unique Entities before & after Levenshtein-Matching")
-        plt.xlabel("Score-Limit")
-        plt.ylabel("Number of unique Entities")
-        plt.legend()
-        plt.grid(True)
-        plt.tight_layout()
-        plt.show()
-

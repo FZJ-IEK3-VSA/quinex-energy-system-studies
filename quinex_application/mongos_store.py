@@ -26,13 +26,15 @@ class MongoStore:
         self.collection = self.db[collection_name]
         self.failed_collection = self.db["failed_papers"]
 
-    def insert_paper(self, name: str, df_doi) -> None:
+
+    def insert_paper(self, name: str, df_doi: pd.DataFrame, take_abstract: bool = False) -> None:
         """
         Inserts DOIs into the main collection via Quinex and logs failures.
 
         Args:
             name (str): Project name for Quinex context.
             df_doi (DataFrame):Pandas DataFrame containing a 'DOI' column.
+            take_abstract (bool). Wether to take the abstract if the download has failed. Default is False.
         """
 
         attempted = len(df_doi["DOI"])
@@ -40,7 +42,7 @@ class MongoStore:
 
         for i, doi in enumerate(df_doi["DOI"], 1):
             try:
-                result = self.quinex.add_doi(name, doi)
+                result = self.quinex.add_doi(name, doi, take_abstract)
             except Exception as e:
                 print(f"❌ Error when adding {doi}: {e}")
                 
@@ -84,6 +86,52 @@ class MongoStore:
         total = self.collection.count_documents({})
         print(f"📚 Total DOIs currently stored: {total}")
 
+
+    def insert_scopus_csv(self, name: str, df: pd.DataFrame, force_overwrite: bool = False):
+        """
+        Adds a Scopus export directly from a pandas DataFrame to an existing bulk analysis session
+        and stores successfully added papers in MongoDB.
+
+        Args:
+            name (str): Name of the analysis session.
+            df (pd.DataFrame): DataFrame containing the Scopus export.
+                            Must include columns: 'DOI', 'Title', 'Source title', 'Year', 'Abstract'.
+            force_overwrite (bool): Wether to overwrite existing DOIs in Quinex.
+        """
+
+        required_cols = {"DOI", "Title", "Source title", "Year", "Abstract"}
+        missing = required_cols - set(df.columns)
+        if missing:
+            raise ValueError(f"Missing required columns: {', '.join(missing)}")
+        
+        df = df.drop_duplicates(subset="DOI", keep="first").reset_index(drop=True)
+
+        try:
+            result = self.quinex.add_scopus_abstract(name, df, force_overwrite)
+            print(f"✅ Inserting papers finished: {result}")
+        except Exception as e:
+            print(result)
+            print(f"❌ Error when adding paper: {e}")
+
+        for doi, paper_id in zip(result.get("successfully_added_papers", []), result.get("paper_ids", [])):
+            # Entferne aus failed_collection, falls vorhanden
+            self.failed_collection.delete_one({"_id": doi})
+
+            self.collection.update_one(
+                {"_id": doi},
+                {
+                    "$setOnInsert": {
+                        "openalex_id": paper_id,
+                        "analysis_result": None,
+                        "created_at": datetime.now(UTC).isoformat()
+                    }
+                },
+                upsert=True
+            )
+        
+        print(f"📚 Added {len(result.get('successfully_added_papers', []))}/{len(df)} papers to Mongo.")
+
+
     def process_paper(self, name: str, dois: list[str], number_of_gpus: int = 5) -> None:
         """
         Performs analysis on papers with missing analysis results.
@@ -111,6 +159,7 @@ class MongoStore:
         except Exception as e:
             print(f"❌ Error when performing quinex: {e}")
 
+
     def rerun_normalizations(self, name: str, dois: list[str]) -> None:
         """
         Reruns normalizations on papers with failed normalization
@@ -131,6 +180,7 @@ class MongoStore:
             print(f"✅ Rerun finished: {result}")
         except Exception as e:
             print(f"❌ Error when rerunning normalizations: {e}")
+
 
     def add_analysis(self, name: str, dois: list[str]) -> None:
         """
@@ -168,7 +218,8 @@ class MongoStore:
 
         print(f"\n📊 Successfully processed: {saved} of {total} DOIs")
 
-    def update_paper_parquet(self, collection_name, parquet_path, quinex_version, oeo_version):
+
+    def update_paper_parquet(self, collection_name, parquet_path, quinex_version, oeo_version, abstract = False):
         """
         Updates the paper parquet file by setting Quinex flags and versions for papers 
         whose DOIs exist in the specified collection.
@@ -178,33 +229,56 @@ class MongoStore:
             parquet_path (str): File path to the parquet file to update.
             quinex_version (str): Version string to set in 'Quinex_Version' column.
             oeo_version (str): Version string to set in 'OEO_Version' column.
+            abstract (str): Wether only the abstract is downloaded and processed.
         """
         df = pd.read_parquet(parquet_path)
         collection = self.get_collection(collection_name)
         failed_collection = self.get_collection("failed_papers")
 
-        success_dois = {doc["_id"] for doc in collection}
-        print(len(success_dois))
-        failed_dois = {doc["_id"] for doc in failed_collection}
-        failed_dois -= success_dois
-    
-        doi_to_quinex_id = {i["_id"]: i.get("openalex_id") for i in collection}
+        doi_to_quinex_id = {}
+        doi_to_has_qs = {}
+        for doc in collection:
+            if not doc:
+                continue
+            doi = doc["_id"]
+            doi_to_quinex_id[doi] = doc.get("openalex_id")
+
+            analysis = doc.get("analysis_result")
+            if analysis is None:
+                doi_to_has_qs[doi] = False
+            else:
+                annotations = analysis.get("annotations") or {}
+                qs = annotations.get("quantitative_statements")
+                doi_to_has_qs[doi] = bool(qs)
+
+        all_collection_dois = set(doi_to_quinex_id.keys())
        
         # Filter rows to update
-        mask = df['DOI'].isin(success_dois)
+        mask = df['DOI'].isin(all_collection_dois)
 
         # Update DataFrame in one vectorized step
-        df.loc[mask, 'Quinex'] = True
+        df.loc[mask, 'Quinex'] = df.loc[mask, 'DOI'].map(lambda doi: bool(doi_to_has_qs.get(doi)))
         df.loc[mask, 'Quinex_ID'] = df.loc[mask, 'DOI'].map(doi_to_quinex_id)
         df.loc[mask, 'Quinex_Version'] = quinex_version
         df.loc[mask, 'OEO_Version'] = oeo_version
-        df.loc[mask, 'Download_Status'] = "Succeeded"
 
+        if abstract:
+            df.loc[mask, 'Download_Status'] = "Abstract Succeeded"
+        else:
+            df.loc[mask, 'Download_Status'] = "Succeeded"
+
+        failed_dois = {doc["_id"] for doc in failed_collection} - all_collection_dois
         failed_mask = df['DOI'].isin(failed_dois)
         df.loc[failed_mask, 'Download_Status'] = "Failed"
+        df.loc[failed_mask, 'Quinex'] = False
 
         df.to_parquet(parquet_path, index=False)
 
+        quinex_counts = df.loc[mask, 'Quinex'].value_counts()
+        num_true = quinex_counts.get(True, 0)
+        num_false = quinex_counts.get(False, 0)
+
+        print(f"In Collection {collection_name} -> Quinex True: {num_true}, Quinex False: {num_false}")
         return df
 
 
@@ -222,6 +296,7 @@ class MongoStore:
         )
         print(f"🔄 Reset: {result.modified_count} of {len(dois)} requested DOIs.")
     
+
     def get_papers_from_collection(self, df, collection_name: str, only_without_analysis: bool = False) -> None:
         """
         Filters a DataFrame to include only DOIs already in the given collection.

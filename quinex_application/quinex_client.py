@@ -1,13 +1,15 @@
 import requests
 import os 
 import re
+import io
+import pandas as pd
 
 class QuinexClient:
     """
     API wrapper for interacting with the Quinex bulk analysis service.
     Provides functionality to submit DOIs, PDFs, and retrieve analysis results.
     """
-
+    
     def __init__(self):
         """
         Initializes the Quinex client with the base API URL.
@@ -45,17 +47,43 @@ class QuinexClient:
         url_endpoint = f"bulk_analysis/{name}"
         return self.post_request(url_endpoint)
 
-    def add_doi(self, name: str, doi: str):
+    def add_doi(self, name: str, doi: str, take_abstract: bool = True):
         """
         Adds a paper to the bulk analysis session by its DOI.
 
         Args:
             name (str): Name of the analysis session.
             doi (str): DOI of the paper to add.
+            take_abstract (bool). Wether to take the abstract if the download has failed. Default is True.
         """
 
-        url_endpoint = f"bulk_analysis/{name}/papers/doi/?doi={doi}"
+        url_endpoint = f"bulk_analysis/{name}/papers/doi/?doi={doi}&take_abstract_as_fallback={take_abstract}"
         return self.post_request(url_endpoint)
+    
+
+    def add_scopus_abstract(self, name: str, df: pd.DataFrame, force_overwrite: bool = False):
+        """
+        Adds a Scopus export directly from a pandas DataFrame to an existing bulk analysis session.
+
+        Args:
+            name (str): Name of the analysis session.
+            df (pd.DataFrame): DataFrame containing the Scopus export.
+                               Must include columns: 'DOI', 'Title', 'Source title', 'Year', 'Abstract'.
+            force_overwrite (bool): Wether to overwrite existing DOIs in Quinex.
+        """
+        
+        csv_buffer = io.StringIO()
+        df.to_csv(csv_buffer, index=False)
+        csv_buffer.seek(0)
+
+        files = {"files": ("scopus_export.csv", csv_buffer.getvalue(), "text/csv")}
+
+        url_endpoint = f"bulk_analysis/{name}/papers/scopus_export/"
+
+        files = {"files": ("scopus_export.csv", csv_buffer.getvalue(), "text/csv")}
+        params = {"force_overwrite": force_overwrite}
+
+        return self.post_request(url_endpoint, files=files, params=params)
     
     def add_pdf(self, name: str, path: str):
         """
@@ -119,6 +147,7 @@ class QuinexClient:
     
         url_endpoint = f"bulk_analysis/{name}/process?skip_imprecise_quantities={skip_imprecise_quantities}&gpu_count={number_of_gpus}"
         return self.post_request(url_endpoint, json={"paper_ids": papers_to_process})
+
 
     def rerun_normalizations(self, name: str, papers_to_process: list):
         """

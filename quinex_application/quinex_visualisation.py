@@ -68,10 +68,8 @@ class QuinexVisualisation():
 
         value_counts = cleaned_data.value_counts().nlargest(top_n)
 
-        sns.set_context("paper", font_scale=1.2)
-
         fig, ax = plt.subplots(figsize=figsize)
-        sns.barplot(x=value_counts.values, y=value_counts.index, ax=ax, color=self.color)
+        sns.barplot(x=value_counts.values, y=value_counts.index, ax=ax, color="steelblue")
 
         ax.set_xlabel("Count")
         ax.set_ylabel(column.capitalize())
@@ -173,6 +171,24 @@ class QuinexVisualisation():
                 marker='o',
             )
 
+            for entity in agg_df['entity_mapping'].unique():
+                entity_df = agg_df[agg_df['entity_mapping'] == entity].copy()
+
+                if 'se' in entity_df.columns:
+                    entity_df = entity_df[entity_df['se'].notna()]
+                    ax.errorbar(
+                        x=entity_df['jahr'],
+                        y=entity_df['value_central'],
+                        yerr=entity_df['se'],
+                        fmt='none',           # Keine Linie, nur Fehlerbalken
+                        ecolor='gray',        # Farbe der Balken
+                        elinewidth=1,
+                        capsize=3,            # Endkappen an Balken
+                        alpha=0.6,
+                        label=None
+                    )
+
+
             n_vals = agg_df['n'].dropna().unique()
             n_vals = np.sort(n_vals.astype(int))
 
@@ -202,33 +218,37 @@ class QuinexVisualisation():
         ax.grid(linestyle='--', alpha=0.3)
         plt.tight_layout()
         return fig
-    
-
-    def plot_properties_over_world(self, df: pd.DataFrame, title :str, value_column: str=None, color_column :str=None, size_legend_title: str=None, color_legend_title: str=None, default_point_size: float=100, figsize: tuple=(14,7), palette :dict=None):
-        """
-        Plots points on a world map with marker size proportional to a value column.
         
-        Parameters:
-            df (pd.DataFrame): Must contain 'latitude', 'longitude', and value_column.
-            value_column (str): Column used for point sizes.
-            color_column (str): Column used for point color.
+
+    def plot_multiple_datasets_on_world(self, datasets: list, title: str, color_legend_title: str=None, figsize=(14, 7), default_point_size=100, palette=None, jitter_strength=0):
+        """
+        Plots multiple datasets with optional size and color encoding on a shared world map.
+        Each dataset can use a distinct marker shape and include its own size legend.
+
+        Args:
+            datasets (list): List of dicts, each with keys:
+                            - 'df': pandas DataFrame with 'latitude' and 'longitude'.
+                            - 'value_column': (optional) Column to control marker sizes.
+                            - 'color_column': (optional) Column to control marker colors.
+                            - 'marker': (optional) Marker shape, e.g., 'o', 's', '^'.
+                            - 'size_legend_title': (optional) Title for the size legend.
+                            - 'legend_position': (optional) X-coordinate for legend placement.
             title (str): Title of the plot.
-            size_legend_title (str): Title of the size legend.
-            color_legend_title (str): Title of the color legend.
-            default_point_size (float): Default point size if no value_column is provided.
-            figsize (tuple): Figure size.
-            palette (dict or str): Seaborn-compatible color palette.
+            color_legend_title (str): Title for the color legend.
+            figsize (tuple): Size of the figure in inches.
+            default_point_size (float): Marker size used if no value_column is specified.
+            palette (dict or None): Optional custom color mapping. If None, seaborn palette is used.
+            jitter_strength (float): Verschiebung der Punkte zur Vermeidung von Überlappung (in Grad).
         """
+        
+        sns.set_context("paper", font_scale=1.2)
 
-        sns.set_context("paper", font_scale=1.2) 
-        
-        if value_column:
-            min_size, max_size = 30, 300
-            values = df[value_column]
-            sizes = min_size + (values - values.min()) / (values.max() - values.min()) * (max_size - min_size)
-        else:
-            sizes = np.full(len(df), default_point_size)
-        
+        jittered_datasets = self.apply_jitter_to_datasets(datasets, jitter_strength)
+
+
+        color_column = jittered_datasets[0].get('color_column', 'entity_mapping')  # Annahme: alle nutzen denselben key
+
+        color_map, categories = self.get_color_map(jittered_datasets, color_column, palette)
 
         fig = plt.figure(figsize=figsize)
         ax = plt.axes(projection=ccrs.PlateCarree())
@@ -238,70 +258,12 @@ class QuinexVisualisation():
         ax.add_feature(cfeature.LAND, facecolor='lightgray')
         ax.gridlines(linewidth=0.5, color='gray', linestyle='--')
 
+        for i, dataset in enumerate(jittered_datasets):
+            self.plot_dataset_on_ax(ax, dataset, color_map, default_point_size, i)
 
-        if color_column:
-            category_counts = df[color_column].value_counts()
-            categories = category_counts.index.tolist()
-
-            if palette:
-                color_map = {cat: palette.get(cat, "#CCCCCC") for cat in categories}
-            else:
-                palette = sns.color_palette("tab10", n_colors=len(categories))
-                color_map = dict(zip(categories, palette))
-
-            # Scatter für jede Kategorie einzeln
-            for category in categories:
-                subset = df[df[color_column] == category]
-                subset_sizes = sizes[subset.index] if value_column else default_point_size
-                ax.scatter(
-                    subset['longitude'],
-                    subset['latitude'],
-                    s=subset_sizes,
-                    color=color_map[category],
-                    alpha=0.6,
-                    label=category,
-                    transform=ccrs.PlateCarree(),
-                    edgecolor='black',
-                    linewidth=0.5
-                )
-
-            handles_color = [
-                mlines.Line2D(
-                    [], [], marker='o', linestyle='None',
-                    markersize=10, markerfacecolor=color_map[cat],
-                    markeredgecolor='black', label=cat
-                )
-                for cat in categories
-            ]
-            color_legend = ax.legend(handles=handles_color, title=color_legend_title, loc='lower left', bbox_to_anchor=(0.2, -0.015), frameon=True)
-            ax.add_artist(color_legend)
-            self.style_legend_frame(color_legend)
-
-        else:
-            ax.scatter(
-                df['longitude'],
-                df['latitude'],
-                s=sizes,
-                c='steelblue',
-                alpha=0.6,
-                transform=ccrs.PlateCarree(),
-                edgecolor='black',
-                linewidth=0.5
-            )
+        self.create_color_legend(ax, color_map, categories, color_legend_title)
 
         ax.set_title(title, fontsize=14, pad=15)
-
-        if value_column:
-            legend_values = [values.min(), values.median(), values.max()]
-            legend_sizes = min_size + (np.array(legend_values) - values.min()) / (values.max() - values.min()) * (max_size - min_size)
-            handles = [
-                plt.scatter([], [], s=s, color='steelblue', alpha=0.6, edgecolor='black', label=f"{v:.2f}")
-                for s, v in zip(legend_sizes, legend_values)
-            ]
-            size_legend = ax.legend(handles=handles, title=size_legend_title, loc='lower left', bbox_to_anchor=(-0.007, -0.015), frameon=True)
-            ax.add_artist(size_legend)
-            self.style_legend_frame(size_legend)
-
         return fig
     
 
@@ -340,8 +302,10 @@ class QuinexVisualisation():
             agg_df = agg_df.rename(columns={'median': 'value_central', 'count': 'n'})
             
         elif central_tendency == "mean":
-            agg_df = df.groupby(['jahr', 'entity_mapping'])['value_normalized'].agg(['mean', 'count']).reset_index()
-            agg_df = agg_df.rename(columns={'mean': 'value_central', 'count': 'n'})
+            agg_df = df.groupby(['jahr', 'entity_mapping'])['value_normalized'].agg(['mean', 'std', 'count']).reset_index()
+            agg_df = agg_df.rename(columns={'mean': 'value_central', 'std': 'std_dev', 'count': 'n'})
+            agg_df['se'] = agg_df['std_dev'] / np.sqrt(agg_df['n'])
+            agg_df['se'] = agg_df['se'].astype(float)
 
         elif central_tendency == "moving average":
             all_years = pd.DataFrame({'jahr': range(df['jahr'].min(), df['jahr'].max() + 1)})
@@ -357,6 +321,16 @@ class QuinexVisualisation():
             agg_df = agg_df.merge(count_df, on=['jahr', 'entity_mapping'], how='left')
 
             agg_df = agg_df[~agg_df['value_normalized'].isna()]
+
+            agg_df['std_dev'] = agg_df.groupby('entity_mapping')['value_normalized'].transform(
+                lambda x: x.rolling(window=3, center=True, min_periods=1).std()
+            )
+            agg_df['n_window'] = agg_df.groupby('entity_mapping')['value_normalized'].transform(
+                lambda x: x.rolling(window=3, center=True, min_periods=1).count()
+            )
+            agg_df['se'] = agg_df['std_dev'] / np.sqrt(agg_df['n_window'])
+
+
         else:
             raise ValueError(f"Unknown central_tendency: {central_tendency}")
 
@@ -399,7 +373,179 @@ class QuinexVisualisation():
     
 
     def style_legend_frame(self, legend):
+        """
+        Defies the style of the Legend.
+
+        Args:
+            legend (_type_): The legend for which to define the style.
+        """
         frame = legend.get_frame()
         frame.set_edgecolor('black')
         frame.set_linewidth(0.4)
         frame.set_alpha(1)
+
+
+    def create_color_legend(self, ax, color_map, categories, color_legend_title):
+        """
+        Adds a shared color legend to the plot for all category types.
+
+        Args:
+            ax (matplotlib.axes._subplots.AxesSubplot): The axis to add the legend to.
+            color_map (dict): Mapping from category to color.
+            categories (list): List of category names to include in the legend.
+            color_legedn_title (str): Title for the color legend.
+        """
+        
+        handles_color = [
+            mlines.Line2D(
+                [], [], marker='X', linestyle='None',
+                markersize=10, markerfacecolor=color_map[cat],
+                markeredgecolor='black', label=cat
+            )
+            for cat in categories
+        ]
+        color_legend = ax.legend(
+            handles=handles_color,
+            title=color_legend_title,
+            loc='lower left',
+            bbox_to_anchor=(-0.007, -0.013),
+            frameon=True
+        )
+        ax.add_artist(color_legend)
+        self.style_legend_frame(color_legend)
+
+    
+    def plot_dataset_on_ax(self, ax, dataset, color_map, default_point_size, i):
+        """
+        Plots one dataset on a given axis, with optional value-based sizing and color-based grouping.
+        Adds an individual size legend if applicable.
+
+        Args:
+            ax (matplotlib.axes._subplots.AxesSubplot): The axis to plot on.
+            dataset (dict): Dictionary with keys needed from data.
+            color_map (dict): Mapping from category to color.
+            default_point_size (float): Size to use if no value_column is provided.
+            i (int): Index of the dataset, used for default legend positioning.
+        """
+
+        df = dataset['df']
+        marker = dataset.get('marker', 'o')
+        value_column = dataset.get('value_column', None)
+        color_column = dataset.get('color_column', None)
+        size_legend_title = dataset.get('size_legend_title', None)
+        legend_x = dataset.get('legend_position', 0.5 * i)
+
+        if value_column:
+            values = df[value_column]
+            sizes = self.calculate_marker_sizes(values)
+        else:
+            sizes = np.full(len(df), default_point_size)
+
+        if color_column:
+            for cat in df[color_column].unique():
+                subset = df[df[color_column] == cat]
+                subset_sizes = sizes[subset.index] if value_column else default_point_size
+                ax.scatter(
+                    subset['longitude'],
+                    subset['latitude'],
+                    s=subset_sizes,
+                    color=color_map[cat],
+                    alpha=1,
+                    transform=ccrs.PlateCarree(),
+                    edgecolor='black',
+                    linewidth=0.5,
+                    marker=marker
+                )
+        else:
+            ax.scatter(
+                df['longitude'],
+                df['latitude'],
+                s=sizes,
+                color='steelblue',
+                alpha=0.6,
+                transform=ccrs.PlateCarree(),
+                edgecolor='black',
+                linewidth=0.5,
+                marker=marker
+            )
+
+        # Size-Legende zurückgeben
+        if value_column:
+            legend_values = [values.min(), values.median(), values.max()]
+            legend_sizes = self.calculate_marker_sizes(np.array(legend_values))
+            handles = [
+                plt.scatter([], [], s=s, color='steelblue', alpha=0.6, edgecolor='black', marker=marker, label=f"{v:.2f}")
+                for s, v in zip(legend_sizes, legend_values)
+            ]
+            size_legend = ax.legend(
+                handles=handles,
+                title=size_legend_title,
+                loc='lower left',
+                bbox_to_anchor=(legend_x, -0.013),
+                frameon=True
+            )
+            ax.add_artist(size_legend)
+            self.style_legend_frame(size_legend)
+
+    
+    def calculate_marker_sizes(self, values, min_size=30, max_size=150):
+        """
+        Scales a numeric Series to marker sizes between min_size and max_size.
+
+        Args:
+            values (pd.Series or np.array): Numeric values to scale.
+            min_size (float): Minimum marker size.
+            max_size (float): Maximum marker size.
+        """
+
+        if values.max() == values.min():
+            return np.full(len(values), (min_size + max_size) / 2)
+        return min_size + (values - values.min()) / (values.max() - values.min()) * (max_size - min_size)
+    
+
+    def get_color_map(self, datasets, color_column, palette=None):
+        """
+        Creates a color mapping for categorical values across multiple datasets.
+
+        Args:
+            datasets (list): List of dicts, each containing a DataFrame under key 'df'.
+            color_column (str): Column name in each DataFrame specifying categories to color by.
+            palette (dict or None): Optional dictionary mapping category names to color codes. If None, a seaborn color palette is used.
+        """
+
+        seen = set()
+        all_color_values = []
+
+        for d in datasets:
+            color_counts = d['df'][color_column].value_counts()
+            color_order = color_counts.index.tolist()
+            for cat in color_order:
+                if cat not in seen:
+                    seen.add(cat)
+                    all_color_values.append(cat)
+
+        if palette:
+            color_map = {cat: palette.get(cat, "#CCCCCC") for cat in all_color_values}
+        else:
+            color_list = sns.color_palette("tab10", n_colors=len(all_color_values))
+            color_map = dict(zip(all_color_values, color_list))
+        return color_map, all_color_values
+    
+    def apply_jitter_to_datasets(self, datasets, jitter_strength=0.2):
+        """
+        Applies a random shift on the latitude and longitude scale on all DataFrames in the Datasets-list to reduce point overlays.
+
+        Args:
+            datasets (list): List of Dictionaries with 'df' as key for DataFrames
+            jitter_strength (float): Maximum Shift in Degree. Defaults to 0.2.
+        """
+
+        jittered = []
+        for d in datasets:
+            d_copy = d.copy()
+            df = d_copy['df'].copy()
+            df['latitude'] += np.random.uniform(-jitter_strength, jitter_strength, size=len(df))
+            df['longitude'] += np.random.uniform(-jitter_strength, jitter_strength, size=len(df))
+            d_copy['df'] = df
+            jittered.append(d_copy)
+        return jittered

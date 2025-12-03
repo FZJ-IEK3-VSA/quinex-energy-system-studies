@@ -27,14 +27,16 @@ class MongoStore:
         self.failed_collection = self.db["failed_papers"]
 
 
-    def insert_paper(self, name: str, df_doi: pd.DataFrame, take_abstract: bool = False) -> None:
+    def insert_paper(self, name: str, df_doi: pd.DataFrame, take_abstract: bool = False, force_redownload: bool = False, only_open_access: bool = True) -> None:
         """
         Inserts DOIs into the main collection via Quinex and logs failures.
 
         Args:
             name (str): Project name for Quinex context.
             df_doi (DataFrame):Pandas DataFrame containing a 'DOI' column.
-            take_abstract (bool). Wether to take the abstract if the download has failed. Default is False.
+            take_abstract (bool): Wether to take the abstract if the download has failed. Default is False.
+            force_redownload (bool): Wether to redownload a doi if already existing.
+            only_open_access (bool): Wether to only download open access paper.
         """
 
         attempted = len(df_doi["DOI"])
@@ -42,15 +44,14 @@ class MongoStore:
 
         for i, doi in enumerate(df_doi["DOI"], 1):
             try:
-                result = self.quinex.add_doi(name, doi, take_abstract)
+                response = self.quinex.add_doi(name, doi, take_abstract, force_redownload, only_open_access)
             except Exception as e:
                 print(f"❌ Error when adding {doi}: {e}")
-                
-            paper_id = self.quinex.get_paper_id_by_doi(name, doi)
-            if paper_id:
-                # Remove from self.failed_collection if existing
+            
+            if response.status_code == 200:
+                paper_id = response.json().get('paper_id')
+            
                 self.failed_collection.delete_one({"_id": doi})
-
                 result = self.collection.update_one(
                     {"_id": doi},
                     {
@@ -62,10 +63,12 @@ class MongoStore:
                     },
                     upsert=True
                 )
+
                 if result.upserted_id:
                     added +=1
                 else: 
                     already_existing += 1
+
             else: 
                 result = self.failed_collection.update_one(
                     {"_id": doi},
@@ -110,7 +113,6 @@ class MongoStore:
             result = self.quinex.add_scopus_abstract(name, df, force_overwrite)
             print(f"✅ Inserting papers finished: {result}")
         except Exception as e:
-            print(result)
             print(f"❌ Error when adding paper: {e}")
 
         for doi, paper_id in zip(result.get("successfully_added_papers", []), result.get("paper_ids", [])):
@@ -206,6 +208,7 @@ class MongoStore:
             try:
                 response = self.quinex.get_analysis(name, openalex_id)
                 if response:
+                    response = self.convert_large_ints(response)
                     self.collection.update_one(
                         {"_id": doi},
                         {"$set": {"analysis_result": response}}
@@ -342,3 +345,31 @@ class MongoStore:
         """
 
         self.db[collection_name].drop()
+
+
+    def convert_large_ints(self, obj, path=""):
+        """
+        Recursively convert integers larger than 64-bit to strings in a nested dict/list.
+
+        Args:
+            obj: dict, list, int, or other value
+            path: str, used for printing the key path
+
+        Returns:
+            obj with large ints converted to strings
+        """
+        if isinstance(obj, dict):
+            new_dict = {}
+            for k, v in obj.items():
+                new_path = f"{path}.{k}" if path else k
+                new_dict[k] = self.convert_large_ints(v, new_path)
+            return new_dict
+        elif isinstance(obj, list):
+            return [self.convert_large_ints(x, f"{path}[{i}]") for i, x in enumerate(obj)]
+        elif isinstance(obj, int):
+            if abs(obj) > 2**63 - 1:
+                print(f"Converting large int at '{path}': {obj} -> str")
+                return str(obj)
+            return obj
+        else:
+            return obj

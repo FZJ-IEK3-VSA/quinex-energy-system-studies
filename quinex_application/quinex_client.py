@@ -47,19 +47,22 @@ class QuinexClient:
         url_endpoint = f"bulk_analysis/{name}"
         return self.post_request(url_endpoint)
 
-    def add_doi(self, name: str, doi: str, take_abstract: bool = True):
+    def add_doi(self, name: str, doi: str, take_abstract: bool = False, force_redownload: bool = False, only_open_access: bool = True):
         """
         Adds a paper to the bulk analysis session by its DOI.
 
         Args:
             name (str): Name of the analysis session.
             doi (str): DOI of the paper to add.
-            take_abstract (bool). Wether to take the abstract if the download has failed. Default is True.
+            take_abstract (bool): Wether to take the abstract if the download has failed. Default is False.
+            force_redownload (bool): Wether to redownload a doi if already existing.
+            only_open_access (bool): Wether to only download open access paper.
         """
 
-        url_endpoint = f"bulk_analysis/{name}/papers/doi/?doi={doi}&take_abstract_as_fallback={take_abstract}"
-        return self.post_request(url_endpoint)
-    
+        url_endpoint = f"bulk_analysis/{name}/papers/doi/?doi={doi}&take_abstract_as_fallback={take_abstract}&force_redownload={force_redownload}&only_open_access={only_open_access}"
+        url = self.url_base + url_endpoint
+        response = requests.post(url)
+        return response
 
     def add_scopus_abstract(self, name: str, df: pd.DataFrame, force_overwrite: bool = False):
         """

@@ -17,116 +17,118 @@ class QuinexDiscussion():
         self.entity_keywords_mapping = {
             "battery": {
                 "types": {
-                    "Lithium-Ion Battery": ["Lithium-Ion Battery", "Li-Ion Battery", "LI Battery", "Li-Ion", "LIB"],
-                    "Nickel-Iron Battery": ["Nickel-Iron Battery", "Ni-Fe Battery"],
-                    "Magnesium Sulfur Battery": ["Magnesium Sulfur Battery", "Mg-S Battery"],
-                    "Sodium Sulfur Battery": ["Sodium Sulfur Battery", "Na-S Battery"],
-                    "Lithium Battery": ["Lithium Battery", "Li Battery"],
-                    "Lithium Iron Phosphate Battery": ["Lithium Iron Phosphate Battery", "LFP Battery", "LiFe Battery"],
-                    "Lead Acid Battery": ["Lead Acid Battery", "Pb-Acid Battery", "LA Battery"],
-                    "Battery": ["Battery", "Accumulator"]
+                    "Lithium-Ion Battery": ["Lithium-Ion (Li-Ion) Battery"],
+                    "Nickel-Iron Battery": ["Nickel-Iron (Ni-Fe) Battery"],
+                    "Sodium Sulfur Battery": ["Sodium Sulfur (Na-S) Battery"],
+                    "Lithium Iron Phosphate Battery": ["Lithium Iron Phosphate (LFP) Battery"],
+                    "Lead Acid Battery": ["Lead Acid (LA) Battery"],
+                    "Battery": ["Battery"]
                 }
             },
             "hydrogen": {
                 "types": {
-                    "Hydrogen": ["Hydrogen", "H2"],
+                    "Hydrogen": ["Hydrogen (H2)"],
                 },
                 "colors": {
-                    "Green Hydrogen": ["Green Hydrogen", "Green H2"],
-                    "Blue Hydrogen": ["Blue Hydrogen", "Blue H2"],
-                    "Grey Hydrogen": ["Grey Hydrogen", "Grey H2"],
-                    "Brown Hydrogen": ["Brown Hydrogen", "Brown H2"],
-                    "Black Hydrogen": ["Black Hydrogen", "Black H2"],
-                    "Turquoise Hydrogen": ["Turquoise Hydrogen", "Turquoise H2"],
-                    "Pink Hydrogen": ["Pink Hydrogen", "Pink H2"],
-                    "Yellow Hydrogen": ["Yellow Hydrogen", "Yellow H2"],
-                    "White Hydrogen": ["White Hydrogen", "White H2"],
+                    "Green Hydrogen": ["Green Hydrogen (H2)"],
+                    "Blue Hydrogen": ["Blue Hydrogen (H2)"],
+                    "Grey Hydrogen": ["Grey Hydrogen (H2)"],
+                    "Brown Hydrogen": ["Brown Hydrogen (H2)"],
+                    "Turquoise Hydrogen": ["Turquoise Hydrogen (H2)"],
                 },
                 "physical_states": {
-                    "Liquid Hydrogen": ["Liquid Hydrogen", "LH2"],
-                    "Compressed Hydrogen": ["Compressed Hydrogen", "CH2"],
-                    "Gaseous Hydrogen": ["Gaseous Hydrogen", "GH2"],
-                    "Solid Hydrogen": ["Solid Hydrogen", "SH2"]
+                    "Liquid Hydrogen": ["Liquid Hydrogen (LH2)"],
+                    "Compressed Hydrogen": ["Compressed Hydrogen (CH2)"],
+                    "Gaseous Hydrogen": ["Gaseous Hydrogen (GH2)"],
                 }
             },
             "pv": {
                 "types": {
-                    "PVSystem": ["PV System", "Photovoltaic System"],
-                    "Rooftop PV System": ["Rooftop PV System", "Roof PV"],
-                    "Utility-scale PV System": ["Utility-scale PV System", "Utility PV"],
-                    "Ground-mounted PV System": ["Ground-mounted PV System", "Ground PV"],
-                    "Floating PV System (FPV)": ["Floating PV System", "FPV"],
-                    "Building-Integrated PV System (BIPV)": ["Building-Integrated PV System", "BIPV"],
-                    "Photovoltaic-Thermal System (PVT)": ["Photovoltaic-Thermal System", "PVT"],
-                    "Hybrid PV System": ["Hybrid PV System", "HPV"]
+                    "PV": ["Photovoltaic (PV)"],
+                    "Rooftop PV": ["Rooftop (Roof) PV"],
+                    "Utility-scale PV": ["Utility-scale PV"],
+                    "Ground-mounted PV": ["Ground-mounted (Ground) PV"],
+                    "Floating PV (FPV)": ["Floating PV (FPV)"],
+                    "Building-Integrated PV (BIPV)": ["Building-Integrated PV (BIPV)"],
+                    "Photovoltaic-Thermal (PVT)": ["Photovoltaic-Thermal (PVT)"]
                 }
             },
             "wind turbine": {
                 "types": {
-                    "Wind Turbine": ["Wind Turbine", "WT"],
-                    "Onshore Wind Turbine": ["Onshore Wind Turbine", "Onshore WT"],
-                    "Offshore Wind Turbine": ["Offshore Wind Turbine", "Offshore WT"],
-                    "Nearshore Wind Turbine": ["Nearshore Wind Turbine", "Nearshore WT"],
-                    "Floating Offshore Wind Turbine": ["Floating Offshore Wind Turbine", "Floating Offshore WT"],
-                    "Small Wind Turbine": ["Small Wind Turbine", "Small WT"],
-                    "Large Wind Turbine": ["Large Wind Turbine", "Large WT"],
-                    "Vertical Axis Wind Turbine (VAWT)": ["Vertical Axis Wind Turbine", "VAWT"],
-                    "Horizontal Axis Wind Turbine (HAWT)": ["Horizontal Axis Wind Turbine", "HAWT"],
-                    "Airborne Wind Turbine": ["Airborne Wind Turbine"],
-                    "Direct Drive Wind Turbine": ["Direct Drive Wind Turbine"]
+                    "Wind Turbine": ["Wind Turbine (WT)"],
+                    "Onshore Wind Turbine": ["Onshore Wind Turbine (WT)"],
+                    "Offshore Wind Turbine": ["Offshore Wind Turbine (WT)"],
+                    "Floating Offshore Wind Turbine": ["Floating Offshore Wind Turbine (WT)"],
+                    "Small Wind Turbine": ["Small Wind Turbine (WT)"],
+                    "Large Wind Turbine": ["Large Wind Turbine (WT)"],
+                    "Vertical Axis Wind Turbine (VAWT)": ["Vertical Axis Wind Turbine (VAWT)"],
+                    "Horizontal Axis Wind Turbine (HAWT)": ["Horizontal Axis Wind Turbine (HAWT)"],
+                    "Airborne Wind Turbine": ["Airborne Wind Turbine (WT)"],
+                    "Direct Drive Wind Turbine": ["Direct Drive Wind Turbine (WT)"]
                 }
             },
             "natural gas": {
                 "types": {
-                    "Natural Gas": ["Natural Gas", "NG"],
-                    "Liquefied Natural Gas (LNG)": ["Liquefied Natural Gas", "LNG"],
-                    "Compressed Natural Gas (CNG)": ["Compressed Natural Gas", "CNG"],
-                    "Natural Gas with CCS": ["Natural Gas with CCS"]
+                    "Natural Gas": ["Natural Gas (NG)"],
+                    "Liquefied Natural Gas (LNG)": ["Liquefied Natural Gas (LNG)"],
+                    "Compressed Natural Gas (CNG)": ["Compressed Natural Gas (CNG)"],
                 }
             },
             "electrolyzer": {
                 "types": {
                     "Electrolyzer": ["Electrolyzer"],
-                    "PEM Electrolyzer": ["PEM Electrolyzer", "PEM"],
-                    "Alkaline Electrolyzer": ["Alkaline Electrolyzer", "Alkaline"],
-                    "AEM Electrolyzer": ["AEM Electrolyzer", "AEM"],
-                    "AEC Electrolyzer": ["AEC Electrolyzer", "AEC"],
-                    "CO2 Electrolyzer": ["CO2 Electrolyzer", "CO2"],
-                    "Solid Oxide Electrolyzer": ["Solid Oxide Electrolyzer", "SOE"],
-                    "Methane Electrolyzer": ["Methane Electrolyzer"],
-                    "Ethylene Electrolyzer": ["Ethylene Electrolyzer"]
+                    "PEM Electrolyzer": ["Proton exchange membrane Electrolyzer (PEM)"],
+                    "Alkaline Electrolyzer": ["Alkaline Electrolyzer"],
+                    "AEM Electrolyzer": ["Anion exchange membrane Electrolyzer (AEM)"],
+                    "AEC Electrolyzer": ["Alkaline electrolysis cells Electrolyzer (AEC)"],
+                    "CO2 Electrolyzer": ["CO2 Electrolyzer (CO2)"],
+                    "Solid Oxide Electrolyzer": ["Solid Oxide Electrolyzer (SOE)"],
+                }
+            },
+            "hybrid": {
+                "types": {
+                    "Hybrid Energy System": ["Hybrid Energy System (HES)"],
+                    "Hybrid Renewable Energy System (HRES)": ["Hybrid Renewable Energy System (HRES)"],
+                    "Hybrid Power Plant": ["Hybrid Power Plant"],
                 }
             },
         }
 
         self.entity_keywords_string = {
-            "battery": ['battery', 'batteries', 'accumulator'],
+            "battery": ['battery', 'batteries'],
             "hydrogen": ['hydrogen', 'H2'],
             "pv": ['PV', 'photovoltaic', 'solar panel', 'solar cell'],
             "wind turbine": ["Wind"],
             "natural gas": ['natural gas', 'fossil gas', 'methane'],
             "electrolyzer": ['electrolyzer', 'electrolyser'],
+            "hybrid": ['hybrid', 'HRES', 'HES'],
         }
 
         self.property_keywords_mapping = {
             "cost": {
-                "Capital Cost": ["Capital Cost", "Capex"],
-                "Operating Cost": ["Operating Cost", "Opex"],
-                "Levelized Cost": ["Levelized Cost", "LCOE", "LCOH", "LCOS", "COE"],
+                "Capital Cost": ["Capital Cost (Capex)"],
+                "Operating Cost": ["Operating Cost (Opex)"],
+                "Levelized Cost": ["Levelized Cost (LCOE/LCOH/LCOS/COE)"],
                 "Electricity Cost": ["Electricity Cost"],
                 "Production Cost": ["Production Cost"],
                 "Total Cost": ["Total Cost"],
                 "Cost": ["Cost"]
             },
             "lifetime": {
-                #"Lifetime": ["Lifetime", "Lifespan", "Service Life", "Durability"]
                 "Lifetime": ["Lifetime", "Lifespan", "Durability"]
             },
             "capacity": {
                 "Installed Capacity": ["Installed Capacity", "Capacity", "Nominal Capacity", "Rated Capacity"]
             },
             "efficiency": {
-                "Efficiency": ["Efficiency", "Conversion Efficiency", "Electrical Efficiency", "Thermal Efficiency"]
+                "Efficiency": ["Efficiency", "Conversion Efficiency", "Electrical Efficiency", "Thermal Efficiency", "Eff"]
+            },
+            "LPSP": {
+                "LPSP": ["loss of power supply probability (LPSP)"]
+            },
+            "emission": {
+                "CO2 emission": ["carbon (CO2) emission"],
+                "GHG emission": ["greenhouse gas (ghg) emissions"]
             }
         }
 
@@ -134,7 +136,9 @@ class QuinexDiscussion():
             "cost": ['cost', 'LCOE', 'LCOH', 'COE', 'price', 'Capex', 'Opex'],
             "lifetime": ["lifetime, durability", "duration", "life"],
             "capacity": ["capacity"],
-            "efficiency": ["efficiency"]
+            "efficiency": ["efficiency", "eff"],
+            "LPSP": ["loss of power supply probability" , "LPSP"],
+            "emission": ["emission"]
         }
 
     # ----------------------------------- Functions for Loading and Saving Data -----------------------------------------------------------
@@ -343,13 +347,12 @@ class QuinexDiscussion():
             threshold (float): Threshold of the similarity to be considered a match.
         """
 
-        url = "http://127.0.0.1:8080/biencoder/match_definition_mention"
+        url = "http://134.94.117.230:8000/api/bulk-upload/match-mention-mapping/"
         json_dict = {
             "mapping_list": mapping_list,
             "mention_list": mention_list
         }
         response = requests.post(url, json=json_dict)
-    
         return {r["mention"]: r["best_mapping"] for r in response.json() if r["score"] >= threshold}
     
 
@@ -379,6 +382,7 @@ class QuinexDiscussion():
             df.loc[:, 'entity_text_lower'] = df['entity_mapping'].str.lower()
             df.loc[:, 'entity_mapping'] = df['entity_text_lower'].map(mapping_dict)
             df.drop(columns=['entity_text_lower'], inplace=True)
+            return df, mention_to_entity
 
         if property:
             canonical_values = self.get_all_synonyms_for_key(property=True, main_key=canonical_name)
@@ -394,8 +398,8 @@ class QuinexDiscussion():
             df.loc[:, 'property_text_lower'] = df['property_mapping'].str.lower()
             df.loc[:, 'property_mapping'] = df['property_text_lower'].map(mapping_dict)
             df.drop(columns=['property_text_lower'], inplace=True)
+            return df, mention_to_property
 
-        return df
     
 
     # ----------------------------------- Functions for Helping the Layout -----------------------------------------------------------

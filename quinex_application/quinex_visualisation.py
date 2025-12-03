@@ -1,8 +1,14 @@
 import os
+import requests
+import ast
+import math
+import scipy.stats as st
 import pandas as pd
 import numpy as np
+import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
+import matplotlib.ticker as mticker
 import seaborn as sns
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -22,6 +28,9 @@ class QuinexVisualisation():
         self.color = sns.color_palette("dark:steelblue", 6)[2]
         self.color2 = sns.color_palette("dark:cyan", 6)[2]
 
+        sns.set_theme(style="ticks")
+        sns.set_context("paper", font_scale=3)
+
     # ----------------------------------- Functions for Loading and Saving Data -----------------------------------------------------------
 
     def load_df(self, path="df_quinex.parquet"):
@@ -31,6 +40,7 @@ class QuinexVisualisation():
         Args:
             path (str): File path of the saved DataFrame.
         """
+
         if not os.path.exists(path):
             raise FileNotFoundError(f"No saved DataFrame found at '{path}'")
 
@@ -38,6 +48,39 @@ class QuinexVisualisation():
         print(f"📂 Loaded DataFrame from '{path}' with {len(df)} rows")
         return df
     
+
+    # ----------------------------------- Postprocessing of the Data ----------------------------------------------------------
+
+    def convert_unit(self, value, input, output, year, parse):
+        url = "http://134.94.117.230:8000/api/units/convert_units/"
+
+        payload = {
+            "value": value,
+            "input_unit": str(input),
+            "output_unit": str(output),
+            "year": year,
+            "parse": parse,
+        }
+
+        response = requests.post(url, json=payload)
+        return response.json()
+    
+    def convert_row(self, row, target_unit):
+        # Input-Unit aus der Zeile
+        input_unit = row["unit_normalized"]
+        output_unit = target_unit
+        value = row['value_normalized']
+        year = row['publication_year']  # Zieljahr aus der Zeile
+        
+        # API-Aufruf
+        if pd.isna(value):
+            return None
+        try:
+            result = self.convert_unit(value, input_unit, output_unit, year, False)
+        except:
+            return None
+        return result[0]
+        
 
     # ----------------------------------- Functions for Graphics -----------------------------------------------------------
     
@@ -74,112 +117,167 @@ class QuinexVisualisation():
         ax.set_xlabel("Count")
         ax.set_ylabel(column.capitalize())
         ax.grid(axis='x')
-        ax.set_title(label=title if title else f"Top {top_n} values in '{column}'", fontsize=14, pad=15)
+        #ax.set_title(label=title if title else f"Top {top_n} values in '{column}'", fontsize=14, pad=15)
 
 
         plt.tight_layout()
         return fig
     
 
-    def plot_properties_over_time(self, df: pd.DataFrame, ylabel: str, title: str, legend_title: str, figsize: tuple =(12, 6), iqr_filter: bool =True, palette: dict =None, plot_type: str = "scatter", central_tendency: str ="mean"):
+    def plot_multiple_properties_over_time(
+        self, 
+        data_list: list,
+        legend_title: str,
+        figsize: tuple =(16, 8),
+        legend_position = (1,0.8),
+        legend_size_position = (1,0.4),
+        central_tendency: str ="mean",
+        error_type : str="se",
+        error_display: str = None,
+        iqr_filter: bool = True,
+        font_size: int = 14
+    ): 
         """
         Plots properties over time with custom color palette and optional IQR filtering.
 
         Args:
-            df (pd.DataFrame): Input DataFrame.
-            ylabel (str): Y-axis label.
-            title (str): Plot title.
+            data_list (list): List of dicts, each with keys: 'df', 'entity_col', 'value_col', 'ylabel', 'palette'
             legend_title (str): Legend title.
             figsize (tuple): Figure size.
             iqr_filter (bool): Whether to remove outliers using IQR.
-            palette (dict or str): Seaborn-compatible color palette.
             plot_type (str): Type of plot to create ("scatter" or "box" or "line").
             central_tendency (str): Type of centraling used for creating the lineplot ("mean" or "median" or "moving average")
+            error_type (str): 'se' or 'ci'
+            error_display (str): Wether to display an error - 'bars' or 'shade'
         """
 
-        df = df.copy()
 
-        if iqr_filter:
-            df = self.apply_iqr_filter(df, column='value_normalized')
-        
-        if not palette:
-            palette ='dark'
+        mpl.rcParams.update({
+            'axes.titlesize': font_size,
+            'axes.labelsize': font_size,
+            'xtick.labelsize': font_size,
+            'ytick.labelsize': font_size,
+            'legend.fontsize': font_size,
+            'legend.title_fontsize': font_size
+        })
 
-        sns.set_context("paper", font_scale=1.2)
-        fig, ax = plt.subplots(figsize=figsize)
+        n_plots = len(data_list)
+        ncols = 2
+        nrows = math.ceil(n_plots / ncols)
 
-        df['jahr'] = df['temporal_scope'].apply(
-            lambda x: x['year'] if isinstance(x, dict) and 'year' in x else pd.NA
-        )
-        if plot_type == "scatter":
+        fig, axes = plt.subplots(nrows, ncols, figsize=figsize, sharey=False)
+        axes = axes.flatten() if n_plots > 1 else [axes]
+
+        # ------------------------------
+        # Einheitliche Farbpalette für alle Entities
+        # ------------------------------
+        all_entities = []
+        all_n_vals = []
+
+        # Sammle alle Entities und n-Werte über alle DataFrames
+        for data in data_list:
+            df = data['df']
+            entity_col = data['entity_col']
+            value_col = data['value_col']
+
+            if iqr_filter:
+                df = self.apply_iqr_filter(df, value_col, entity_col)
+
+            # Temporal Scope
+            df['temporal_scope'] = df['temporal_scope'].apply(
+                lambda x: x if isinstance(x, dict) else ({'year': ast.literal_eval(x)['year']} if isinstance(x, str) else {'year': x})
+            )
+            df['jahr'] = df['temporal_scope'].apply(lambda x: x.get('year', pd.NA))
             df['jahr'] = pd.to_numeric(df['jahr'], errors='coerce')
             df['jahr'] = df['jahr'].fillna(df['publication_year']).astype(int)
 
-            sns.scatterplot(
-                data=df,
-                x='jahr',
-                y='value_normalized',
-                hue='entity_mapping',
-                palette=palette,
-                alpha=0.7,
-                ax=ax,
+            # Aggregates
+            agg_df = self.calculate_aggregates(df, entity_col, value_col, central_tendency, error_type)
+            agg_df = agg_df[agg_df['n'] >= 5]
+
+            all_entities.extend(agg_df[entity_col].unique())
+            all_n_vals.extend(agg_df['n'].dropna().astype(int).unique())
+
+        all_entities = sorted(list(set(all_entities)))
+        palette_colors = sns.color_palette("tab10", n_colors=len(all_entities))
+        color_dict = dict(zip(all_entities, palette_colors))
+
+        # Einheitliche min/max Werte für Scatter-Größen
+        min_n, max_n = min(all_n_vals), max(all_n_vals)
+        size_range = (20, 200)
+
+
+        # ------------------------------
+        # Plotten der einzelnen Subplots
+        # ------------------------------
+        for i, data in enumerate(data_list):
+            ax = axes[i]
+            df = data['df'].copy()
+            entity_col = data['entity_col']
+            value_col = data['value_col']
+            ylabel = data['ylabel']
+
+            if iqr_filter:
+                df = self.apply_iqr_filter(df, value_col, entity_col)
+
+            # Temporal Scope
+            df['temporal_scope'] = df['temporal_scope'].apply(
+                lambda x: x if isinstance(x, dict) else ({'year': ast.literal_eval(x)['year']} if isinstance(x, str) else {'year': x})
             )
+            df['jahr'] = df['temporal_scope'].apply(lambda x: x.get('year', pd.NA))
+            df['jahr'] = pd.to_numeric(df['jahr'], errors='coerce')
+            df['jahr'] = df['jahr'].fillna(df['publication_year']).astype(int)
             
-        elif plot_type == "box":
-            df['jahr'] = pd.to_numeric(df['jahr'], errors='coerce')
-            df['jahr'] = df['jahr'].fillna(df['publication_year']).astype(int).astype(str)
+            # Aggregates
+            agg_df = self.calculate_aggregates(df, entity_col, value_col, central_tendency, error_type)
+            agg_df = agg_df[agg_df['n'] >= 5]
 
-            jahre = sorted(df['jahr'].unique(), key=lambda x: int(x) if x.isdigit() else x)
-            df['jahr'] = pd.Categorical(df['jahr'], categories=jahre, ordered=True)
-
-            sns.boxplot(
-                data=df,
-                x='jahr',
-                y='value_normalized',
-                hue='entity_mapping',
-                palette=palette,
-                ax=ax,
-                width=0.4,
-                showfliers=False,
-            )
-
-        elif plot_type == "line":
-            df['jahr'] = pd.to_numeric(df['jahr'], errors='coerce')
-            df['jahr'] = df['jahr'].fillna(df['publication_year']).astype(int)
-                        
-            agg_df = self.calculate_aggregates(df, central_tendency)
-
+            # ------------------------------
+            # Lineplot
+            # ------------------------------
             sns.lineplot(
                 data=agg_df,
                 x='jahr',
                 y='value_central',
-                hue='entity_mapping',
-                palette=palette,
+                hue=entity_col,
+                palette=color_dict,
                 ax=ax,
             )
 
+            # ------------------------------
+            # Scatterplot (einheitliche Größen)
+            # ------------------------------
             sns.scatterplot(
                 data=agg_df,
                 x='jahr',
                 y='value_central',
-                hue='entity_mapping',
+                hue=entity_col,
                 size='n',
-                sizes=(20, 200),  # Skaliere je nach Geschmack
-                palette=palette,
+                sizes=size_range,  # Skaliere je nach Geschmack
+                palette=color_dict,
                 legend=False,
                 ax=ax,
                 marker='o',
             )
 
-            for entity in agg_df['entity_mapping'].unique():
-                entity_df = agg_df[agg_df['entity_mapping'] == entity].copy()
+            # ------------------------------
+            # Fehlerbalken oder Shade
+            # ------------------------------
+            if error_display == "bars":
+                for entity in agg_df[entity_col].unique():
+                    entity_df = agg_df[agg_df[entity_col] == entity].copy()
 
-                if 'se' in entity_df.columns:
-                    entity_df = entity_df[entity_df['se'].notna()]
+                    if error_type == "se" and 'se' in entity_df.columns:
+                        yerr = entity_df['se']
+                    elif error_type == "ci" and 'ci' in entity_df.columns:
+                        yerr = entity_df['ci']
+                    else:
+                        continue
+
                     ax.errorbar(
                         x=entity_df['jahr'],
                         y=entity_df['value_central'],
-                        yerr=entity_df['se'],
+                        yerr=yerr,
                         fmt='none',           # Keine Linie, nur Fehlerbalken
                         ecolor='gray',        # Farbe der Balken
                         elinewidth=1,
@@ -187,149 +285,309 @@ class QuinexVisualisation():
                         alpha=0.6,
                         label=None
                     )
+            
+            elif error_display == "shade":
+                for entity in agg_df[entity_col].unique():
+                    entity_df = agg_df[agg_df[entity_col] == entity].sort_values('jahr')
 
+                    if error_type == "se" and 'se' in entity_df.columns:
+                        lower = entity_df['value_central'] - entity_df['se']
+                        upper = entity_df['value_central'] + entity_df['se']
 
-            n_vals = agg_df['n'].dropna().unique()
-            n_vals = np.sort(n_vals.astype(int))
+                    elif error_type == "ci" and 'ci_lower' in entity_df.columns:
+                        lower = entity_df['ci_lower']
+                        upper = entity_df['ci_upper']
 
-            handles_sample_size = self.create_size_legend_handles(ax, n_vals)
+                    else:
+                        continue
 
-            handles, labels = ax.get_legend_handles_labels()
-            color_handles_labels = [(h, l) for h, l in zip(handles, labels) if not l.startswith('n = ')]
-            if color_handles_labels:
-                color_handles, color_labels = zip(*color_handles_labels)
-                color_legend = ax.legend(color_handles, color_labels, title=legend_title, bbox_to_anchor=(0, 1), loc='upper left')
-                ax.add_artist(color_legend)
+                    ax.fill_between(
+                        entity_df['jahr'],
+                        lower,
+                        upper,
+                        color=color_dict[entity],
+                        alpha=0.2
+                    )
 
-            # Sample Size Legende separat hinzufügen
-            size_legend = ax.legend(handles=handles_sample_size, title='Sample Size', bbox_to_anchor=(0.257, 1), loc='upper left')
-            ax.add_artist(size_legend)
-
-        else:
-            raise ValueError("plot_type must be either 'scatter' or 'box' or 'line'")
+            # ------------------------------
+            # Achsen, Gitter und Titel
+            # ------------------------------
+            ax.set_xlabel('Year')
+            ax.set_ylabel(ylabel)
+            ax.grid(linestyle='--', alpha=0.6)
+            ax.xaxis.set_major_locator(mticker.MultipleLocator(5))
+            ax.set_title(f"{chr(97+i)})", loc='left', fontweight='bold')
         
-        ax.set_xlabel('Year')
-        ax.set_ylabel(ylabel)
-        ax.set_title(title, fontsize=14, pad=15)
+            # Legende lokal entfernen
+            if ax.get_legend() is not None:
+                ax.get_legend().remove()
 
-        if plot_type != "line":
-            ax.legend(title=legend_title, bbox_to_anchor=(1, 1), loc='upper right')
+        # ------------------------------
+        # Gemeinsame Farb-Legende
+        # ------------------------------
+        handles = [plt.Line2D([0],[0], color=color_dict[e], lw=2) for e in all_entities]
+        fig.legend(
+            handles=handles, 
+            labels=all_entities, 
+            title=legend_title,
+            bbox_to_anchor=legend_position, 
+            loc='upper left'
+        )
 
-        ax.grid(linestyle='--', alpha=0.3)
-        plt.tight_layout()
+        # ------------------------------
+        # Gemeinsame Größen-Legende
+        # ------------------------------
+        size_handles = self.create_size_legend_handles(ax, np.sort(np.unique(all_n_vals)))
+        fig.legend(
+            handles=size_handles, 
+            title='Sample Size', 
+            bbox_to_anchor=legend_size_position, 
+            loc='upper left'
+        )
+        
+        plt.tight_layout()     
         return fig
         
 
-    def plot_multiple_datasets_on_world(self, datasets: list, title: str, color_legend_title: str=None, figsize=(14, 7), default_point_size=100, palette=None, jitter_strength=0):
+    def plot_multiple_datasets_on_world(
+        self,
+        datasets: list,
+        colorbar_title: str = None,
+        figsize=(14, 7),
+        default_point_size=60,
+        jitter_strength=0.0,
+        cmap="viridis",
+    ):    
         """
-        Plots multiple datasets with optional size and color encoding on a shared world map.
-        Each dataset can use a distinct marker shape and include its own size legend.
+        Plots multiple datasets on a shared world map, encoding numeric values via color
+        and (optionally) categorical entities via marker shape.
 
         Args:
             datasets (list): List of dicts, each with keys:
                             - 'df': pandas DataFrame with 'latitude' and 'longitude'.
-                            - 'value_column': (optional) Column to control marker sizes.
-                            - 'color_column': (optional) Column to control marker colors.
-                            - 'marker': (optional) Marker shape, e.g., 'o', 's', '^'.
-                            - 'size_legend_title': (optional) Title for the size legend.
-                            - 'legend_position': (optional) X-coordinate for legend placement.
-            title (str): Title of the plot.
-            color_legend_title (str): Title for the color legend.
+                            - 'value_column': str, numeric column used for the color gradient.
+                            - 'entity_column': (optional) str, categorical column for marker shapes.
+                            - 'title': Title for the subplot, e.g., 'a) Wind Turbine'.
+            colorbar_title (str): Title for the color scale shown to the right of the world map.
             figsize (tuple): Size of the figure in inches.
-            default_point_size (float): Marker size used if no value_column is specified.
-            palette (dict or None): Optional custom color mapping. If None, seaborn palette is used.
-            jitter_strength (float): Verschiebung der Punkte zur Vermeidung von Überlappung (in Grad).
+            default_point_size (float): Size of the markers.
+            jitter_strength (float): Random spatial jitter (in degrees) applied to avoid overlapping points.
+            cmap (str): Color map used for the values.
         """
-        
-        sns.set_context("paper", font_scale=1.2)
 
+        n_plots = len(datasets)
+        ncols = 2
+        nrows = math.ceil(n_plots / ncols)
+        fig, axes = plt.subplots(nrows, ncols, figsize=figsize, subplot_kw={'projection': ccrs.PlateCarree()})
+        axes = axes.flatten() if n_plots > 1 else [axes]
+
+        # -------------------------------------------
+        # 1) Filter per dataset (IQR) if value_column exists
+        # -------------------------------------------
+        all_vals = []
+        for data in datasets:
+            df = data["df"].copy()
+            val_col = data["value_column"]
+
+            if val_col not in df.columns:
+                raise ValueError(f"Value column '{val_col}' not found in dataset.")
+
+            ent_col = data.get("entity_column", None)
+
+            if pd.api.types.is_numeric_dtype(df[val_col]):
+                if ent_col:
+                    df = self.apply_iqr_filter(df, val_col, ent_col)
+                else:
+                    df = self.apply_iqr_filter(df.assign(dummy="x"), val_col, "dummy").drop(columns="dummy")
+
+            data['df'] = df
+            all_vals.append(df[val_col])
+
+        # Combine all values for global color scaling
+        all_vals = pd.concat(all_vals)
+        vmin, vmax = all_vals.min(), all_vals.max()
+        norm = plt.Normalize(vmin=vmin, vmax=vmax)
+        scalar_map = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+
+        # -------------------------------------------
+        # 2) Jitter
+        # -------------------------------------------
         jittered_datasets = self.apply_jitter_to_datasets(datasets, jitter_strength)
 
+        # -------------------------------------------
+        # 3) Marker shapes (if entity_col provided)
+        # -------------------------------------------
+        marker_cycle = ["o", "s", "^", "D", "P", "X", "v", "<", ">"]
+        entity_marker_map = {}
 
-        color_column = jittered_datasets[0].get('color_column', 'entity_mapping')  # Annahme: alle nutzen denselben key
+        # Collect all entity categories
+        all_entities = []
+        for data in jittered_datasets:
+            ent_col = data.get("entity_column", None)
+            if ent_col:
+                all_entities.extend(data["df"][ent_col].dropna().unique())
 
-        color_map, categories = self.get_color_map(jittered_datasets, color_column, palette)
+        all_entities = sorted(list(set(all_entities)))
 
-        fig = plt.figure(figsize=figsize)
-        ax = plt.axes(projection=ccrs.PlateCarree())
-        ax.set_global()
-        ax.coastlines()
-        ax.add_feature(cfeature.BORDERS, edgecolor='black')
-        ax.add_feature(cfeature.LAND, facecolor='lightgray')
-        ax.gridlines(linewidth=0.5, color='gray', linestyle='--')
+        for i, ent in enumerate(all_entities):
+            entity_marker_map[ent] = marker_cycle[i % len(marker_cycle)]
 
-        for i, dataset in enumerate(jittered_datasets):
-            self.plot_dataset_on_ax(ax, dataset, color_map, default_point_size, i)
+        # -------------------------------------------
+        # 4) Plotting
+        # -------------------------------------------
+        for i, data in enumerate(datasets):
+            ax = axes[i]
+            df = data['df']
+            value_col = data['value_column']
+            entity_col = data.get('entity_column', None)
+            title = data.get('title', '')
 
-        self.create_color_legend(ax, color_map, categories, color_legend_title)
+            # Weltkarte
+            ax.set_global()
+            ax.coastlines()
+            ax.add_feature(cfeature.BORDERS, edgecolor='black')
+            ax.add_feature(cfeature.LAND, facecolor='lightgray')
+            ax.gridlines(linewidth=0.5, color='gray', linestyle='--')
 
-        ax.set_title(title, fontsize=14, pad=15)
+            # Scatter
+            for _, row in df.iterrows():
+                color = scalar_map.to_rgba(row[value_col])
+                marker = entity_marker_map[row[entity_col]] if entity_col else 'o'
+                ax.scatter(
+                    row['longitude'],
+                    row['latitude'],
+                    color=color,
+                    s=default_point_size,
+                    marker=marker,
+                    transform=ccrs.PlateCarree(),
+                    edgecolor='black',
+                    linewidth=0.5
+                )
+
+            # Untertitel / Buchstabenlabel
+            ax.set_title(title, loc='left', fontweight='bold')
+
+        # -------------------------------------------
+        # 5) Add colorbar on the right
+        # -------------------------------------------
+        cbar = plt.colorbar(
+            scalar_map,
+            ax=ax,
+            orientation="vertical",
+            fraction=0.015,     # << smaller
+            pad=0.02            # << tighter
+        )
+        cbar.ax.set_ylabel(colorbar_title if colorbar_title else "Value", fontsize=14)
+
+        # -------------------------------------------
+        # 6) Add legend for entity markers (if needed)
+        # -------------------------------------------
+        if all_entities:
+            handles = [
+                plt.Line2D(
+                    [0], [0],
+                    marker=entity_marker_map[e],
+                    linestyle="",
+                    markersize=10,
+                    color="black",
+                    label=str(e)
+                )
+                for e in entity_marker_map
+            ]
+
+            ax.legend(
+                handles=handles,
+                title="Entity",
+                loc="lower left",
+                frameon=True
+            )
+
         return fig
-    
 
     # ----------------------------------- Helper Functions -----------------------------------------------------------
 
-    def apply_iqr_filter(self, df: pd.DataFrame, column: str = 'value_normalized') -> pd.DataFrame:
+    def apply_iqr_filter(self, df: pd.DataFrame, value_column: str, entity_col: str) -> pd.DataFrame:
         """
         Removes outliers from a column using the IQR method.
 
         Args:
             df (pd.DataFrame): Input DataFrame.
-            column (str): Column on which to apply the IQR filter.
+            value_column (str): Column on which to apply the IQR filter.
 
         Returns:
             pd.DataFrame: Filtered DataFrame without outliers.
         """
-        Q1 = df[column].quantile(0.25)
-        Q3 = df[column].quantile(0.75)
-        IQR = Q3 - Q1
-        lower = Q1 - 1.5 * IQR
-        upper = Q3 + 1.5 * IQR
-        return df[(df[column] >= lower) & (df[column] <= upper)]
+
+        def filter_group(df):
+            Q1 = df[value_column].quantile(0.20)
+            Q3 = df[value_column].quantile(0.80)
+            IQR = Q3 - Q1
+            lower = Q1 - 1.5 * IQR
+            upper = Q3 + 1.5 * IQR
+            return df[(df[value_column] >= lower) & (df[value_column] <= upper)]
+    
+        return df.groupby(entity_col, group_keys=False).apply(filter_group)
+
     
 
-    def calculate_aggregates(self, df: pd.DataFrame, central_tendency: str):
+    def calculate_aggregates(self, df: pd.DataFrame, entity_col: str, value_col: str, central_tendency: str, error_type: str):
         """
-        Aggregate DataFrame by 'jahr' and 'entity_mapping' based on central tendency method.
+        Aggregate DataFrame by 'jahr' and entity_col based on central tendency method.
 
         Args:
             df (pd.DataFrame): Input DataFrame with 'jahr' column.
             central_tendency (str): 'mean', 'median' or 'moving average'.
+            error_type (str): 'se' or 'ci'
         """
 
         if central_tendency == "median":
-            agg_df = df.groupby(['jahr', 'entity_mapping'])['value_normalized'].agg(['median', 'count']).reset_index()
+            agg_df = df.groupby(['jahr', entity_col])[value_col].agg(['median', 'count']).reset_index()
             agg_df = agg_df.rename(columns={'median': 'value_central', 'count': 'n'})
+            agg_df['std_dev'] = df.groupby(['jahr', entity_col])[value_col].std().values
+            agg_df['se'] = agg_df['std_dev'] / np.sqrt(agg_df['n'])
             
         elif central_tendency == "mean":
-            agg_df = df.groupby(['jahr', 'entity_mapping'])['value_normalized'].agg(['mean', 'std', 'count']).reset_index()
+            agg_df = df.groupby(['jahr', entity_col])[value_col].agg(['mean', 'std', 'count']).reset_index()
             agg_df = agg_df.rename(columns={'mean': 'value_central', 'std': 'std_dev', 'count': 'n'})
             agg_df['se'] = agg_df['std_dev'] / np.sqrt(agg_df['n'])
             agg_df['se'] = agg_df['se'].astype(float)
 
+            if error_type == "ci":
+                # t-Wert: df = n-1
+                agg_df['t_val'] = agg_df['n'].apply(lambda n: st.t.ppf(0.975, n-1) if n > 1 else np.nan)
+                agg_df['ci'] = agg_df['t_val'] * agg_df['se']
+                agg_df['ci_lower'] = agg_df['value_central'] - agg_df['ci']
+                agg_df['ci_upper'] = agg_df['value_central'] + agg_df['ci']
+
         elif central_tendency == "moving average":
             all_years = pd.DataFrame({'jahr': range(df['jahr'].min(), df['jahr'].max() + 1)})
-            entities = df['entity_mapping'].unique()
-            full_index = pd.MultiIndex.from_product([all_years['jahr'], entities], names=['jahr', 'entity_mapping']).to_frame(index=False)
+            entities = df[entity_col].unique()
+            full_index = pd.MultiIndex.from_product([all_years['jahr'], entities], names=['jahr', entity_col]).to_frame(index=False)
 
-            mean_values = df.groupby(['jahr', 'entity_mapping'])['value_normalized'].mean().reset_index()
-            agg_df = full_index.merge(mean_values, on=['jahr', 'entity_mapping'], how='left').sort_values(['entity_mapping', 'jahr'])
-            agg_df['value_central'] = agg_df.groupby('entity_mapping')['value_normalized'].transform(
+            mean_values = df.groupby(['jahr', entity_col])[value_col].mean().reset_index()
+            agg_df = full_index.merge(mean_values, on=['jahr', entity_col], how='left').sort_values([entity_col, 'jahr'])
+            agg_df['value_central'] = agg_df.groupby(entity_col)[value_col].transform(
                 lambda x: x.rolling(window=3, center=True, min_periods=1).mean()
             )
-            count_df = df.groupby(['jahr', 'entity_mapping']).size().reset_index(name='n')
-            agg_df = agg_df.merge(count_df, on=['jahr', 'entity_mapping'], how='left')
+            count_df = df.groupby(['jahr', entity_col]).size().reset_index(name='n')
+            agg_df = agg_df.merge(count_df, on=['jahr', entity_col], how='left')
 
-            agg_df = agg_df[~agg_df['value_normalized'].isna()]
+            agg_df = agg_df[~agg_df[value_col].isna()]
 
-            agg_df['std_dev'] = agg_df.groupby('entity_mapping')['value_normalized'].transform(
+            agg_df['std_dev'] = agg_df.groupby(entity_col)[value_col].transform(
                 lambda x: x.rolling(window=3, center=True, min_periods=1).std()
             )
-            agg_df['n_window'] = agg_df.groupby('entity_mapping')['value_normalized'].transform(
+            agg_df['n_window'] = agg_df.groupby(entity_col)[value_col].transform(
                 lambda x: x.rolling(window=3, center=True, min_periods=1).count()
             )
             agg_df['se'] = agg_df['std_dev'] / np.sqrt(agg_df['n_window'])
 
+            
+            if error_type == "ci":
+                agg_df['t_val'] = agg_df['n_window'].apply(lambda n: st.t.ppf(0.975, n-1) if n > 1 else np.nan)
+                agg_df['ci'] = agg_df['t_val'] * agg_df['se']
+                agg_df['ci_lower'] = agg_df['value_central'] - agg_df['ci']
+                agg_df['ci_upper'] = agg_df['value_central'] + agg_df['ci']
 
         else:
             raise ValueError(f"Unknown central_tendency: {central_tendency}")
@@ -385,12 +643,13 @@ class QuinexVisualisation():
         frame.set_alpha(1)
 
 
-    def create_color_legend(self, ax, color_map, categories, color_legend_title):
+    def create_color_legend(self, ax, fig, color_map, categories, color_legend_title, color_legend_position = (0,0)):
         """
         Adds a shared color legend to the plot for all category types.
 
         Args:
             ax (matplotlib.axes._subplots.AxesSubplot): The axis to add the legend to.
+            fig (matplotlib.figures._subplots.FiguresSubplot): The figure to plot on.
             color_map (dict): Mapping from category to color.
             categories (list): List of category names to include in the legend.
             color_legedn_title (str): Title for the color legend.
@@ -404,24 +663,25 @@ class QuinexVisualisation():
             )
             for cat in categories
         ]
-        color_legend = ax.legend(
+        color_legend = fig.legend(
             handles=handles_color,
             title=color_legend_title,
             loc='lower left',
-            bbox_to_anchor=(-0.007, -0.013),
+            bbox_to_anchor=color_legend_position,
             frameon=True
         )
         ax.add_artist(color_legend)
         self.style_legend_frame(color_legend)
 
     
-    def plot_dataset_on_ax(self, ax, dataset, color_map, default_point_size, i):
+    def plot_dataset_on_ax(self, ax, fig, dataset, color_map, default_point_size, i):
         """
         Plots one dataset on a given axis, with optional value-based sizing and color-based grouping.
         Adds an individual size legend if applicable.
 
         Args:
             ax (matplotlib.axes._subplots.AxesSubplot): The axis to plot on.
+            fig (matplotlib.figures._subplots.FiguresSubplot): The figure to plot on.
             dataset (dict): Dictionary with keys needed from data.
             color_map (dict): Mapping from category to color.
             default_point_size (float): Size to use if no value_column is provided.
@@ -433,11 +693,12 @@ class QuinexVisualisation():
         value_column = dataset.get('value_column', None)
         color_column = dataset.get('color_column', None)
         size_legend_title = dataset.get('size_legend_title', None)
-        legend_x = dataset.get('legend_position', 0.5 * i)
+        size_legend_position = dataset.get('size_legend_position', None)
 
         if value_column:
             values = df[value_column]
-            sizes = self.calculate_marker_sizes(values)
+            min_size, max_size = default_point_size, default_point_size*20
+            sizes = self.calculate_marker_sizes(values, min_size, max_size)
         else:
             sizes = np.full(len(df), default_point_size)
 
@@ -471,24 +732,26 @@ class QuinexVisualisation():
 
         # Size-Legende zurückgeben
         if value_column:
-            legend_values = [values.min(), values.median(), values.max()]
-            legend_sizes = self.calculate_marker_sizes(np.array(legend_values))
+            legend_values = np.quantile(values, [0.1, 0.5, 0.9])
+            legend_values = np.round(legend_values, 1)
+            min_size, max_size = default_point_size, default_point_size*20
+            legend_sizes = self.calculate_marker_sizes(np.array(legend_values), min_size, max_size)
             handles = [
                 plt.scatter([], [], s=s, color='steelblue', alpha=0.6, edgecolor='black', marker=marker, label=f"{v:.2f}")
                 for s, v in zip(legend_sizes, legend_values)
             ]
-            size_legend = ax.legend(
+            size_legend = fig.legend(
                 handles=handles,
                 title=size_legend_title,
                 loc='lower left',
-                bbox_to_anchor=(legend_x, -0.013),
+                bbox_to_anchor=size_legend_position,
                 frameon=True
             )
             ax.add_artist(size_legend)
             self.style_legend_frame(size_legend)
 
     
-    def calculate_marker_sizes(self, values, min_size=30, max_size=150):
+    def calculate_marker_sizes(self, values, min_size=30, max_size=600):
         """
         Scales a numeric Series to marker sizes between min_size and max_size.
 
@@ -549,3 +812,21 @@ class QuinexVisualisation():
             d_copy['df'] = df
             jittered.append(d_copy)
         return jittered
+    
+
+    def convert_spatial(self, df):
+        df = df[df['spatial_scope'].notna()]
+        df['spatial_scope'] = df['spatial_scope'].apply(
+            lambda x: x if isinstance(x, dict)
+            else ast.literal_eval(x) if isinstance(x, str)
+            else {'country': None, 'latitude': None, 'longitude': None}
+        )
+
+        df['latitude'] = df['spatial_scope'].apply(
+            lambda x: float(x['latitude']) if isinstance(x, dict) and 'latitude' in x else None
+        )
+
+        df['longitude'] = df['spatial_scope'].apply(
+            lambda x: float(x['longitude']) if isinstance(x, dict) and 'longitude' in x else None
+        )
+        return df

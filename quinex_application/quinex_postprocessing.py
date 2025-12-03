@@ -1,4 +1,5 @@
 import os
+import json
 import pandas as pd
 
 class QuinexPostprocessing():
@@ -65,10 +66,10 @@ class QuinexPostprocessing():
         entity = claim.get("entity", {}).get("text", "")
         prop = claim.get("property", {}).get("text", "")
 
-        temporal_scope = qualifiers.get("temporal_scope", {}).get("normalized", {})
+        temporal_scope = qualifiers.get("temporal_scope", {}).get("normalized", {'year': None})
         temporal = {"year": temporal_scope.get("year", pd.NA)} if temporal_scope.get("year", pd.NA) else pd.NA
 
-        spatial_scope = qualifiers.get("spatial_scope", {}).get("normalized", {})
+        spatial_scope = qualifiers.get("spatial_scope", {}).get("normalized", {'country': None, 'country_code': None, 'latitude': None, 'longitude': None, 'osm_place_id': None})
         spatial = {"country": spatial_scope.get("country", pd.NA), "latitude": spatial_scope.get("latitude", pd.NA), "longitude": spatial_scope.get("longitude", pd.NA)} if spatial_scope.get("latitude", pd.NA) and spatial_scope.get("longitude", pd.NA)  else pd.NA
         
         classification = {
@@ -94,9 +95,9 @@ class QuinexPostprocessing():
                 {
                     "value": u.get("value", {}).get("normalized", {}).get("numeric_value", pd.NA),
                     "unit": [
-                        {"unit_uri": n.get("uri"), "exponent": n.get("exponent"), "year": n.get("year")}
+                        {"text": n.get("text"), "exponent": n.get("exponent"), "unit_uri": n.get("uri"), "year": n.get("year")}
                         for n in u.get("unit", {}).get("normalized", [])
-                    ] or [{"unit_uri": "http://qudt.org/vocab/unit/UNITLESS", "exponent": pd.NA, "year": pd.NA}],
+                    ] or [{"text": pd.NA, "exponent": pd.NA,  "unit_uri": "http://qudt.org/vocab/unit/UNITLESS", "year": pd.NA}],
                     "modifier": u.get("value", {}).get("normalized", {}).get("modifiers", pd.NA)
                 }
                 for u in quantity_normalized
@@ -112,23 +113,23 @@ class QuinexPostprocessing():
         numeric_values = [e["value"] for e in combined_quantity_list if isinstance(e["value"], (int, float))]
         value = pd.NA if not numeric_values else numeric_values[0] if len(numeric_values) == 1 else sum(numeric_values) / len(numeric_values)
         
-        units = (combined_quantity_list[0].get("unit") if combined_quantity_list else []) or [{"unit_uri": "http://qudt.org/vocab/unit/UNITLESS", "exponent": pd.NA}]
-        unit = " / ".join(filter(None, [
-            " * ".join(
-                f"{u['unit_uri']}" if u.get("exponent") == 1 else f"{u['unit_uri']}^{u['exponent']}"
-                for u in units if isinstance(u.get("exponent"), int) and u["exponent"] > 0
-            ),
-            " * ".join(
-                f"{u['unit_uri']}" if abs(u.get("exponent", 0)) == 1 else f"{u['unit_uri']}^{abs(u['exponent'])}"
-                for u in units if isinstance(u.get("exponent"), int) and u["exponent"] < 0
-            )
-        ])) or units[0]["unit_uri"]
+        unit = (combined_quantity_list[0].get("unit") if combined_quantity_list else []) or [{"text": pd.NA, "exponent": pd.NA,  "unit_uri": "http://qudt.org/vocab/unit/UNITLESS", "year": pd.NA}]
+        # unit = " / ".join(filter(None, [
+        #     " * ".join(
+        #         f"{u['unit_uri']}" if u.get("exponent") == 1 else f"{u['unit_uri']}^{u['exponent']}"
+        #         for u in units if isinstance(u.get("exponent"), int) and u["exponent"] > 0
+        #     ),
+        #     " * ".join(
+        #         f"{u['unit_uri']}" if abs(u.get("exponent", 0)) == 1 else f"{u['unit_uri']}^{abs(u['exponent'])}"
+        #         for u in units if isinstance(u.get("exponent"), int) and u["exponent"] < 0
+        #     )
+        # ])) or units[0]["unit_uri"]
 
         text_quote = self.get_quote()
 
         records.append({
             "publication_year": self.year,
-            "paper_id": self.doi,
+            "DOI": self.doi,
             "classification": classification,
             "entity": entity,
             "property": prop,
@@ -203,29 +204,32 @@ class QuinexPostprocessing():
 
             authorship = metadata.get("authorships", [])
             countries = []
-            for a in authorship:
-                for c in a['countries']:
-                    if c not in countries:
-                        countries.append(c)
+            if authorship:
+                for a in authorship:
+                    for c in a['countries']:
+                        if c not in countries:
+                            countries.append(c)
 
             topics = metadata.get("topics", [])
             topic = []
-            for t in topics:
-                topic_name = t.get("display_name", "")
-                topic.append(topic_name)
+            if topics:
+                for t in topics:
+                    topic_name = t.get("display_name", "")
+                    topic.append(topic_name)
 
             concepts = metadata.get("concepts", [])
             concept = []
-            for c in concepts:
-                concept_name = c.get("display_name", "")
-                concept.append(concept_name)
+            if concepts:
+                for c in concepts:
+                    concept_name = c.get("display_name", "")
+                    concept.append(concept_name)
 
             source = metadata.get("primary_location", {}).get("source", {}).get("display_name", "")
             host_organization = metadata.get("primary_location", {}).get("source", {}).get("host_organization_name", "")
 
             records.append({
                 "publication_year": self.year,
-                "paper_id": self.doi,
+                "DOI": self.doi,
                 "countries": countries,
                 "topics": topic,
                 "concepts": concept,
@@ -246,12 +250,19 @@ class QuinexPostprocessing():
             df (pd.DataFrame): The DataFrame to save.
             path (str): File path for saving.
         """
+
+        if 'quantity_normalized' in df.columns:
+            mask = df['quantity_normalized'].apply(self.has_string_value)
+            num_bad = mask.sum()
+            if num_bad > 0:
+                print(f"⚠️ Entferne {num_bad} problematische Zeilen mit String-Werten in 'quantity_normalized'.")
+            df = df[~mask]
+
         if os.path.exists(path):
             try:
                 existing_df = pd.read_parquet(path)
-                existing_dois = set(existing_df['paper_id'].dropna().unique())
-                new_rows = df[df['paper_id'].notna() & ~df['paper_id'].isin(existing_dois)]
-                
+                existing_dois = set(existing_df['DOI'].dropna().unique())
+                new_rows = df[df['DOI'].notna() & ~df['DOI'].isin(existing_dois)]
 
                 if new_rows.empty:
                     print("ℹ️ No new DOIs to add. File remains unchanged.")
@@ -282,3 +293,18 @@ class QuinexPostprocessing():
         df = pd.read_parquet(path)
         print(f"📂 Loaded DataFrame from '{path}' with {len(df)} rows")
         return df
+    
+
+    def has_string_value(self, q):
+        """
+        Prüft, ob in quantity_normalized mindestens ein value ein String ist.
+        """
+        if not isinstance(q, dict):
+            return False
+        if "quantities" not in q:
+            return False
+        for item in q["quantities"]:
+            v = item.get("value")
+            if isinstance(v, str):
+                return True
+        return False

@@ -28,6 +28,17 @@ class ProcessScopusData():
         self.query_date = query_date
         self.df = None
         self.additional_cols = ["Quinex", "Quinex_ID", "Quinex_Version", "Lizenz", "OEO_Version", "Download_Status"]
+        self.preferred_order = [
+            "Year",
+            "Title",
+            "Source title",
+            "Publisher",
+            "Cited by",
+            "DOI",
+            "Link",
+            "Abstract",
+            "Open Access"
+        ]
 
         self.parquet_df = self.load_parquet_if_exists()
 
@@ -48,17 +59,19 @@ class ProcessScopusData():
         else:
             raise ValueError(f"Unsupported file type: {self.csvs_paths}. Only .csv, .xls, and .xlsx are supported.")
 
-
         # Concatenate CSVs and remove duplicate rows
         self.df = pd.concat(dfs, ignore_index=True).drop_duplicates()
 
         if self.quelle_name == "Source: WOS":
             rename_map = {
                 'Publication Year': 'Year',
+                'Article Title': 'Title',
                 'Source Title': 'Source title',
+                'Publisher': 'Publisher',
                 'Times Cited, All Databases': 'Cited by',
                 'DOI': 'DOI',
                 'DOI Link': 'Link',
+                'Abstract': 'Abstract',
                 'Open Access Designations': 'Open Access'
             }
             columns_to_keep = [col for col in rename_map if col in self.df.columns]
@@ -104,7 +117,7 @@ class ProcessScopusData():
 
         # Sort by number of citations (descending)
         self.df = self.df.sort_values(by="Cited by", ascending=False)
-
+     
         # Remove duplicates based on DOI - keep the first one
         self.df = self.df.drop_duplicates(subset="DOI", keep="first")
         self.df = self.df.sort_index().reset_index(drop=True)
@@ -143,9 +156,37 @@ class ProcessScopusData():
         """
         Appends new rows with DOIs not yet in the parquet.
         """
-        new_dois = set(self.df['DOI']) - set(self.parquet_df['DOI'])
-        new_rows = self.df[self.df["DOI"].isin(new_dois)]
-        return pd.concat([self.parquet_df, new_rows], ignore_index=True)
+        parquet = self.parquet_df.copy()
+
+        existing_dois = set(parquet["DOI"])
+        new_dois = set(self.df["DOI"]) - existing_dois
+        overlapping_dois = set(self.df["DOI"]) & existing_dois
+
+        for col in self.df.columns:
+            if col not in parquet.columns:
+                parquet[col] = pd.NA
+
+        if overlapping_dois:
+            df_updates = self.df[self.df["DOI"].isin(overlapping_dois)].set_index("DOI")
+            parquet = parquet.set_index("DOI")
+
+            # Überschreibe nur Spalten, die im neuen DF vorhanden sind
+            for col in self.preferred_order:
+                if col in df_updates.columns:
+                    if col == "Abstract":
+                        # Überschreibe nur, wenn aktuell None oder pd.NA
+                        mask = parquet[col].isna()
+                        parquet.loc[mask, col] = df_updates.loc[mask, col]
+                    else:
+                        parquet.loc[df_updates.index, col] = df_updates[col]
+
+            parquet = parquet.reset_index()
+
+        if new_dois:
+            new_rows = self.df[self.df["DOI"].isin(new_dois)]
+            parquet = pd.concat([parquet, new_rows], ignore_index=True)
+
+        return parquet
     
     def update_query_columns(self, df_updated):
         """
@@ -186,6 +227,12 @@ class ProcessScopusData():
         Sorts the DataFrame by year and reorders columns: Open Access → Source → Query → rest.
         """
         df = df.sort_values(by="Year", ascending=True).reset_index(drop=True)
+
+        existing_preferred = [col for col in self.preferred_order if col in df.columns]
+        remaining_cols = [col for col in df.columns if col not in existing_preferred]
+        ordered_cols = existing_preferred + remaining_cols
+        df = df[ordered_cols]
+
 
         cols = list(df.columns)
         index_oa = cols.index("Open Access")

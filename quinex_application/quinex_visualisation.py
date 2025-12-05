@@ -65,12 +65,13 @@ class QuinexVisualisation():
         response = requests.post(url, json=payload)
         return response.json()
     
-    def convert_row(self, row, target_unit):
+    def convert_row(self, row, target_unit, year=None):
         # Input-Unit aus der Zeile
         input_unit = row["unit_normalized"]
         output_unit = target_unit
         value = row['value_normalized']
-        year = row['publication_year']  # Zieljahr aus der Zeile
+        if not year:
+            year = row['publication_year']  # Zieljahr aus der Zeile
         
         # API-Aufruf
         if pd.isna(value):
@@ -128,6 +129,7 @@ class QuinexVisualisation():
         self, 
         data_list: list,
         legend_title: str,
+        color_dict: dict = None,
         figsize: tuple =(16, 8),
         legend_position = (1,0.8),
         legend_size_position = (1,0.4),
@@ -141,7 +143,7 @@ class QuinexVisualisation():
         Plots properties over time with custom color palette and optional IQR filtering.
 
         Args:
-            data_list (list): List of dicts, each with keys: 'df', 'entity_col', 'value_col', 'ylabel', 'palette'
+            data_list (list): List of dicts, each with keys: 'df', 'entity_col', 'value_col', 'ylabel', 'title'
             legend_title (str): Legend title.
             figsize (tuple): Figure size.
             iqr_filter (bool): Whether to remove outliers using IQR.
@@ -162,7 +164,7 @@ class QuinexVisualisation():
         })
 
         n_plots = len(data_list)
-        ncols = 2
+        ncols = 2 if n_plots > 1 else 1
         nrows = math.ceil(n_plots / ncols)
 
         fig, axes = plt.subplots(nrows, ncols, figsize=figsize, sharey=False)
@@ -199,12 +201,17 @@ class QuinexVisualisation():
             all_n_vals.extend(agg_df['n'].dropna().astype(int).unique())
 
         all_entities = sorted(list(set(all_entities)))
-        palette_colors = sns.color_palette("tab10", n_colors=len(all_entities))
-        color_dict = dict(zip(all_entities, palette_colors))
+        if color_dict is None:
+            palette_colors = sns.color_palette("tab10", n_colors=len(all_entities))
+            color_dict = dict(zip(all_entities, palette_colors))
 
         # Einheitliche min/max Werte für Scatter-Größen
         min_n, max_n = min(all_n_vals), max(all_n_vals)
-        size_range = (20, 200)
+        size_range = (50, 200)
+
+        # Mapping n -> s
+        def map_n_to_s(n):
+            return np.interp(n, [min_n, max_n], [size_range[0], size_range[1]])
 
 
         # ------------------------------
@@ -216,6 +223,7 @@ class QuinexVisualisation():
             entity_col = data['entity_col']
             value_col = data['value_col']
             ylabel = data['ylabel']
+            title = data.get('title', '')
 
             if iqr_filter:
                 df = self.apply_iqr_filter(df, value_col, entity_col)
@@ -232,6 +240,10 @@ class QuinexVisualisation():
             agg_df = self.calculate_aggregates(df, entity_col, value_col, central_tendency, error_type)
             agg_df = agg_df[agg_df['n'] >= 5]
 
+            # Neue Spalte für gemappte Punktgrößen
+            agg_df['size_mapped'] = map_n_to_s(agg_df['n'].fillna(min_n))
+
+
             # ------------------------------
             # Lineplot
             # ------------------------------
@@ -247,18 +259,27 @@ class QuinexVisualisation():
             # ------------------------------
             # Scatterplot (einheitliche Größen)
             # ------------------------------
-            sns.scatterplot(
-                data=agg_df,
-                x='jahr',
-                y='value_central',
-                hue=entity_col,
-                size='n',
-                sizes=size_range,  # Skaliere je nach Geschmack
-                palette=color_dict,
-                legend=False,
-                ax=ax,
-                marker='o',
+            ax.scatter(
+                agg_df['jahr'],
+                agg_df['value_central'],
+                s=agg_df['size_mapped'],
+                c=agg_df[entity_col].map(color_dict),
+                edgecolor='w',
+                linewidth=0.3,
+                alpha=0.9,
             )
+            # sns.scatterplot(
+            #     data=agg_df,
+            #     x='jahr',
+            #     y='value_central',
+            #     hue=entity_col,
+            #     size='size_mapped',
+            #     sizes=size_range,  # Skaliere je nach Geschmack
+            #     palette=color_dict,
+            #     legend=False,
+            #     ax=ax,
+            #     marker='o',
+            # )
 
             # ------------------------------
             # Fehlerbalken oder Shade
@@ -316,7 +337,7 @@ class QuinexVisualisation():
             ax.set_ylabel(ylabel)
             ax.grid(linestyle='--', alpha=0.6)
             ax.xaxis.set_major_locator(mticker.MultipleLocator(5))
-            ax.set_title(f"{chr(97+i)})", loc='left', fontweight='bold')
+            ax.set_title(title, loc='left', fontweight='bold')
         
             # Legende lokal entfernen
             if ax.get_legend() is not None:
@@ -331,18 +352,18 @@ class QuinexVisualisation():
             labels=all_entities, 
             title=legend_title,
             bbox_to_anchor=legend_position, 
-            loc='upper left'
+            loc='upper left',
         )
 
         # ------------------------------
         # Gemeinsame Größen-Legende
         # ------------------------------
-        size_handles = self.create_size_legend_handles(ax, np.sort(np.unique(all_n_vals)))
+        size_handles = self.create_size_legend_handles(ax, np.sort(np.unique(all_n_vals)), size_range[0], size_range[1])
         fig.legend(
             handles=size_handles, 
             title='Sample Size', 
             bbox_to_anchor=legend_size_position, 
-            loc='upper left'
+            loc='upper left',
         )
         
         plt.tight_layout()     
@@ -376,7 +397,7 @@ class QuinexVisualisation():
         """
 
         n_plots = len(datasets)
-        ncols = 2
+        ncols = 2 if n_plots > 1 else 1
         nrows = math.ceil(n_plots / ncols)
         fig, axes = plt.subplots(nrows, ncols, figsize=figsize, subplot_kw={'projection': ccrs.PlateCarree()})
         axes = axes.flatten() if n_plots > 1 else [axes]

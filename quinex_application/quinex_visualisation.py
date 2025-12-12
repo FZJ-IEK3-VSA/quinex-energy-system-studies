@@ -9,6 +9,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
 import matplotlib.ticker as mticker
+from matplotlib.colors import LogNorm
 import seaborn as sns
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -30,6 +31,24 @@ class QuinexVisualisation():
 
         sns.set_theme(style="ticks")
         sns.set_context("paper", font_scale=3)
+
+        self.entity_colors = {
+            "Battery": "#8b0000",             # Dunkelrot – Basisfarbe für alle Batterien
+            "Lithium-Ion Battery": "#ff0000", # Hellere Variante
+            "Lead Acid Battery": "#4E0000",   # Dunklere Variante
+
+            "PV": "#ffd700",                   # Gelb/Gold
+
+            "Wind Turbine": "#1e90ff",
+            "Wind": "#1e90ff",        # Himmelblau
+            "Onshore Wind": "#8bc5ff",
+            "Offshore Wind": "#06223f",
+
+            "Coal": "#46250f",                 # Braun
+            "Electrolyzer": "#32cd32",         # Grün
+            "Hydrogen": "#ff69b4",             # Pink
+        }
+
 
     # ----------------------------------- Functions for Loading and Saving Data -----------------------------------------------------------
 
@@ -130,14 +149,18 @@ class QuinexVisualisation():
         data_list: list,
         legend_title: str,
         color_dict: dict = None,
-        figsize: tuple =(16, 8),
-        legend_position = (1,0.8),
-        legend_size_position = (1,0.4),
+        figsize: tuple = (16, 8),
+        legend_position = (1,1),
+        legend_size_position = (1,0),
         central_tendency: str ="mean",
         error_type : str="se",
         error_display: str = None,
         iqr_filter: bool = True,
-        font_size: int = 14
+        font_size: int = 14,
+        number_xticks: tuple = 5,
+        point_size_range: tuple = (50, 200),
+        temporal_col: str = "temporal_scope",
+        publicationyear_col: str = "publication_year"
     ): 
         """
         Plots properties over time with custom color palette and optional IQR filtering.
@@ -178,7 +201,7 @@ class QuinexVisualisation():
 
         # Sammle alle Entities und n-Werte über alle DataFrames
         for data in data_list:
-            df = data['df']
+            df = data['df'].copy()
             entity_col = data['entity_col']
             value_col = data['value_col']
 
@@ -186,12 +209,12 @@ class QuinexVisualisation():
                 df = self.apply_iqr_filter(df, value_col, entity_col)
 
             # Temporal Scope
-            df['temporal_scope'] = df['temporal_scope'].apply(
+            df[temporal_col] = df[temporal_col].apply(
                 lambda x: x if isinstance(x, dict) else ({'year': ast.literal_eval(x)['year']} if isinstance(x, str) else {'year': x})
             )
-            df['jahr'] = df['temporal_scope'].apply(lambda x: x.get('year', pd.NA))
+            df['jahr'] = df[temporal_col].apply(lambda x: x.get('year', pd.NA))
             df['jahr'] = pd.to_numeric(df['jahr'], errors='coerce')
-            df['jahr'] = df['jahr'].fillna(df['publication_year']).astype(int)
+            df['jahr'] = df['jahr'].fillna(df[publicationyear_col]).astype(int)
 
             # Aggregates
             agg_df = self.calculate_aggregates(df, entity_col, value_col, central_tendency, error_type)
@@ -207,7 +230,7 @@ class QuinexVisualisation():
 
         # Einheitliche min/max Werte für Scatter-Größen
         min_n, max_n = min(all_n_vals), max(all_n_vals)
-        size_range = (50, 200)
+        size_range = point_size_range
 
         # Mapping n -> s
         def map_n_to_s(n):
@@ -229,12 +252,12 @@ class QuinexVisualisation():
                 df = self.apply_iqr_filter(df, value_col, entity_col)
 
             # Temporal Scope
-            df['temporal_scope'] = df['temporal_scope'].apply(
+            df[temporal_col] = df[temporal_col].apply(
                 lambda x: x if isinstance(x, dict) else ({'year': ast.literal_eval(x)['year']} if isinstance(x, str) else {'year': x})
             )
-            df['jahr'] = df['temporal_scope'].apply(lambda x: x.get('year', pd.NA))
+            df['jahr'] = df[temporal_col].apply(lambda x: x.get('year', pd.NA))
             df['jahr'] = pd.to_numeric(df['jahr'], errors='coerce')
-            df['jahr'] = df['jahr'].fillna(df['publication_year']).astype(int)
+            df['jahr'] = df['jahr'].fillna(df[publicationyear_col]).astype(int)
             
             # Aggregates
             agg_df = self.calculate_aggregates(df, entity_col, value_col, central_tendency, error_type)
@@ -336,7 +359,7 @@ class QuinexVisualisation():
             ax.set_xlabel('Year')
             ax.set_ylabel(ylabel)
             ax.grid(linestyle='--', alpha=0.6)
-            ax.xaxis.set_major_locator(mticker.MultipleLocator(5))
+            ax.xaxis.set_major_locator(mticker.MultipleLocator(number_xticks))
             ax.set_title(title, loc='left', fontweight='bold')
         
             # Legende lokal entfernen
@@ -378,6 +401,9 @@ class QuinexVisualisation():
         default_point_size=60,
         jitter_strength=0.0,
         cmap="viridis",
+        font_size=14,
+        log_scale: bool = False, 
+        apply_iqr=True,
     ):    
         """
         Plots multiple datasets on a shared world map, encoding numeric values via color
@@ -395,6 +421,14 @@ class QuinexVisualisation():
             jitter_strength (float): Random spatial jitter (in degrees) applied to avoid overlapping points.
             cmap (str): Color map used for the values.
         """
+        mpl.rcParams.update({
+            'axes.titlesize': font_size,
+            'axes.labelsize': font_size,
+            'xtick.labelsize': font_size,
+            'ytick.labelsize': font_size,
+            'legend.fontsize': font_size,
+            'legend.title_fontsize': font_size
+        })
 
         n_plots = len(datasets)
         ncols = 2 if n_plots > 1 else 1
@@ -403,40 +437,13 @@ class QuinexVisualisation():
         axes = axes.flatten() if n_plots > 1 else [axes]
 
         # -------------------------------------------
-        # 1) Filter per dataset (IQR) if value_column exists
-        # -------------------------------------------
-        all_vals = []
-        for data in datasets:
-            df = data["df"].copy()
-            val_col = data["value_column"]
-
-            if val_col not in df.columns:
-                raise ValueError(f"Value column '{val_col}' not found in dataset.")
-
-            ent_col = data.get("entity_column", None)
-
-            if pd.api.types.is_numeric_dtype(df[val_col]):
-                if ent_col:
-                    df = self.apply_iqr_filter(df, val_col, ent_col)
-                else:
-                    df = self.apply_iqr_filter(df.assign(dummy="x"), val_col, "dummy").drop(columns="dummy")
-
-            data['df'] = df
-            all_vals.append(df[val_col])
-
-        # Combine all values for global color scaling
-        all_vals = pd.concat(all_vals)
-        vmin, vmax = all_vals.min(), all_vals.max()
-        norm = plt.Normalize(vmin=vmin, vmax=vmax)
-        scalar_map = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-
-        # -------------------------------------------
-        # 2) Jitter
+        # 1) Jitter
         # -------------------------------------------
         jittered_datasets = self.apply_jitter_to_datasets(datasets, jitter_strength)
 
+
         # -------------------------------------------
-        # 3) Marker shapes (if entity_col provided)
+        # 2) Marker shapes (if entity_col provided)
         # -------------------------------------------
         marker_cycle = ["o", "s", "^", "D", "P", "X", "v", "<", ">"]
         entity_marker_map = {}
@@ -453,8 +460,44 @@ class QuinexVisualisation():
         for i, ent in enumerate(all_entities):
             entity_marker_map[ent] = marker_cycle[i % len(marker_cycle)]
 
+        
+        # -----------------------------
+        # 3) Global color scale
+        # -----------------------------
+        all_vals = []
+        for data in jittered_datasets:
+            df = data["df"].copy()
+            val_col = data["value_column"]
+            if val_col not in df.columns:
+                raise ValueError(f"Value column '{val_col}' not found in dataset.")
+
+            ent_col = data.get("entity_column", None)
+
+            if apply_iqr:
+                if pd.api.types.is_numeric_dtype(df[val_col]):
+                    if ent_col:
+                        df = self.apply_iqr_filter(df, val_col, ent_col)
+                    else:
+                        df = self.apply_iqr_filter(df.assign(dummy="x"), val_col, "dummy").drop(columns="dummy")
+
+            data['df'] = df
+            all_vals.append(df[val_col])
+
+        all_vals = pd.concat(all_vals)
+        if log_scale:
+            min_pos = all_vals[all_vals > 0].min()
+            vmin = max(min_pos, 1e-12)
+            vmax = all_vals.max()
+            norm = LogNorm(vmin=vmin, vmax=vmax)
+        else:
+            vmin = all_vals.min()
+            vmax = all_vals.max()
+            norm = plt.Normalize(vmin=vmin, vmax=vmax)
+
+        scalar_map = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+
         # -------------------------------------------
-        # 4) Plotting
+        # 3) Plotting
         # -------------------------------------------
         for i, data in enumerate(datasets):
             ax = axes[i]
@@ -463,14 +506,19 @@ class QuinexVisualisation():
             entity_col = data.get('entity_column', None)
             title = data.get('title', '')
 
-            # Weltkarte
+            # ----------------------------------------------------------
+            # Draw world map
+            # ----------------------------------------------------------
             ax.set_global()
             ax.coastlines()
             ax.add_feature(cfeature.BORDERS, edgecolor='black')
             ax.add_feature(cfeature.LAND, facecolor='lightgray')
-            ax.gridlines(linewidth=0.5, color='gray', linestyle='--')
+            ax.add_feature(cfeature.OCEAN, facecolor='whitesmoke')
+            ax.set_extent([-180, 180, -60, 90], crs=ccrs.PlateCarree())
 
-            # Scatter
+            # ----------------------------------------------------------
+            # Scatter points
+            # ----------------------------------------------------------
             for _, row in df.iterrows():
                 color = scalar_map.to_rgba(row[value_col])
                 marker = entity_marker_map[row[entity_col]] if entity_col else 'o'
@@ -485,43 +533,42 @@ class QuinexVisualisation():
                     linewidth=0.5
                 )
 
-            # Untertitel / Buchstabenlabel
-            ax.set_title(title, loc='left', fontweight='bold')
+            # ----------------------------------------------------------
+            # Subplot title
+            # ----------------------------------------------------------
+            ax.set_title(title, loc='left', fontweight='bold', pad=10)
 
-        # -------------------------------------------
-        # 5) Add colorbar on the right
-        # -------------------------------------------
+            if ent_col:
+                handles = [
+                    plt.Line2D(
+                        [0], [0],
+                        marker=entity_marker_map[e],
+                        linestyle="",
+                        markersize=10,
+                        color="black",
+                        label=str(e)
+                    )
+                    for e in entity_marker_map
+                ]
+                ax.legend(handles=handles, loc="lower left", frameon=True)
+
+        # ----------------------------------------------------------
+        # Individual colorbar per subplot (tight layout)
+        # ----------------------------------------------------------
         cbar = plt.colorbar(
             scalar_map,
-            ax=ax,
+            ax=axes,
             orientation="vertical",
-            fraction=0.015,     # << smaller
-            pad=0.02            # << tighter
+            fraction=0.01,     # << smaller
+            pad=0.01            # << tighter
         )
-        cbar.ax.set_ylabel(colorbar_title if colorbar_title else "Value", fontsize=14)
+        cbar.ax.set_ylabel(colorbar_title if colorbar_title else "Value", fontsize=font_size)
 
-        # -------------------------------------------
-        # 6) Add legend for entity markers (if needed)
-        # -------------------------------------------
-        if all_entities:
-            handles = [
-                plt.Line2D(
-                    [0], [0],
-                    marker=entity_marker_map[e],
-                    linestyle="",
-                    markersize=10,
-                    color="black",
-                    label=str(e)
-                )
-                for e in entity_marker_map
-            ]
-
-            ax.legend(
-                handles=handles,
-                title="Entity",
-                loc="lower left",
-                frameon=True
-            )
+        plt.subplots_adjust(
+            wspace=0.02,
+            hspace=0.02,
+            right=0.88
+        )
 
         return fig
 
@@ -539,17 +586,14 @@ class QuinexVisualisation():
             pd.DataFrame: Filtered DataFrame without outliers.
         """
 
-        def filter_group(df):
-            Q1 = df[value_column].quantile(0.20)
-            Q3 = df[value_column].quantile(0.80)
-            IQR = Q3 - Q1
-            lower = Q1 - 1.5 * IQR
-            upper = Q3 + 1.5 * IQR
-            return df[(df[value_column] >= lower) & (df[value_column] <= upper)]
-    
-        return df.groupby(entity_col, group_keys=False).apply(filter_group)
+        Q1 = df.groupby(entity_col)[value_column].transform(lambda x: x.quantile(0.2))
+        Q3 = df.groupby(entity_col)[value_column].transform(lambda x: x.quantile(0.8))
+        IQR = Q3 - Q1
+        lower = Q1 - 1.5 * IQR
+        upper = Q3 + 1.5 * IQR
+        mask = (df[value_column] >= lower) & (df[value_column] <= upper)
+        return df[mask]
 
-    
 
     def calculate_aggregates(self, df: pd.DataFrame, entity_col: str, value_col: str, central_tendency: str, error_type: str):
         """
@@ -835,19 +879,19 @@ class QuinexVisualisation():
         return jittered
     
 
-    def convert_spatial(self, df):
-        df = df[df['spatial_scope'].notna()]
-        df['spatial_scope'] = df['spatial_scope'].apply(
+    def convert_spatial(self, df, spatial_col="spatial_scope"):
+        df = df[df[spatial_col].notna()].copy()
+        df['spatial_scope'] = df[spatial_col].apply(
             lambda x: x if isinstance(x, dict)
             else ast.literal_eval(x) if isinstance(x, str)
             else {'country': None, 'latitude': None, 'longitude': None}
         )
 
-        df['latitude'] = df['spatial_scope'].apply(
+        df['latitude'] = df[spatial_col].apply(
             lambda x: float(x['latitude']) if isinstance(x, dict) and 'latitude' in x else None
         )
 
-        df['longitude'] = df['spatial_scope'].apply(
+        df['longitude'] = df[spatial_col].apply(
             lambda x: float(x['longitude']) if isinstance(x, dict) and 'longitude' in x else None
         )
         return df

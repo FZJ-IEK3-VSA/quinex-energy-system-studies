@@ -9,14 +9,14 @@ class QuinexDiscussion():
     Prepares the Discusssion Data from the results observed using quinex.
     """
     
-    def __init__(self):
+    def __init__(self, entity_path, property_path):
         """
         Initializes the discussion client.
         """
 
         pd.set_option('display.max_colwidth', None)
 
-        with open("../data/visualisation_files/regex/entity_patterns.json", "r", encoding="utf-8") as f:
+        with open(entity_path, "r", encoding="utf-8") as f:
             self.entity_regex_map = json.load(f)
         self.entity_regex_map = {
             category: {
@@ -26,7 +26,7 @@ class QuinexDiscussion():
             for category, labels in self.entity_regex_map.items()
         }
 
-        with open("../data/visualisation_files/regex/property_patterns.json", "r", encoding="utf-8") as f:
+        with open(property_path, "r", encoding="utf-8") as f:
             self.property_regex_map = json.load(f)
         self.property_regex_map = {
             category: {

@@ -3,3 +3,5 @@
 quinex_application/__pycache__/*
 notebooks/test.ipynb
 .env
+streamlit/components/__pycache__/*
+streamlit/utils/__pycache__/*

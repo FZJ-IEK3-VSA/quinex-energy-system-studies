@@ -1,7 +1,14 @@
+import glob
+import os
+import re
+import math
 import pandas as pd
 import plotly.graph_objects as go
 import matplotlib.pyplot as plt
 import seaborn as sns
+import matplotlib as mpl
+from matplotlib.cm import ScalarMappable
+from matplotlib.ticker import PercentFormatter
 
 class VisualisationMetadata():
     def __init__(self, df_path):
@@ -19,166 +26,100 @@ class VisualisationMetadata():
         self.df = self.df[self.df[f"{query}_{date}"] == True]
 
 
-    def countries_share_year(self, metadata_df: pd.DataFrame, top_n: int, figsize: tuple = (12, 6), legend_position: tuple = (0.91, 1)):
-        """
-        Plot the share of publications per year for the top N countries.
+    def countries_share_and_sjr(
+        self,
+        metadata_df: pd.DataFrame,
+        top_n_line: int = 10,   # Anzahl Länder für Linienplot und farbig im Scatter
+        top_n_scatter: int = 20, # Anzahl Länder für Scatter-Plot insgesamt
+        figsize: tuple = (16, 6),
+        font_size: int = 12,
+        color_map: dict = None,
+        legend_loc: str = 'upper right',
+        legend_bbox: tuple = None
+    ):
+        # --- Font size ---
+        mpl.rcParams.update({
+            'axes.titlesize': font_size,
+            'axes.labelsize': font_size,
+            'xtick.labelsize': font_size,
+            'ytick.labelsize': font_size,
+            'legend.fontsize': font_size,
+            'legend.title_fontsize': font_size
+        })
 
-        Args:
-            metadata_df (pd.DataFrame):  DataFrame containing publication metadata with columns 'DOI', 'publication_year', and 'countries'.
-            top_n (int): Number of top countries to display.
-            figsize (tuple, optional): Figure size for the plot (width, height).
-        """
-        
-        # --- Percent of Papers with Missing Country ---
+        # --- Missing info ---
         missing_papers = metadata_df[metadata_df['countries'].str.len() == 0]['DOI'].nunique()
         total_papers = metadata_df['DOI'].nunique()
-        missing_share = missing_papers / total_papers * 100
-        print(f"Missing country info: {missing_papers} papers ({missing_share:.2f} %)")
+        print(f"Missing country info: {missing_papers} papers ({missing_papers/total_papers*100:.2f} %)")
+        missing_sjr = metadata_df['SJR'].isna().sum()
+        print(f"Missing SJR info: {missing_sjr} papers ({missing_sjr/total_papers*100:.2f} %)")
 
-        # --- Expand Lists in Country column ---
+        # --- Clean Data ---
         df_clean = metadata_df[metadata_df['countries'].str.len() > 0].explode('countries')
+        df_clean['SJR'] = pd.to_numeric(df_clean['SJR'].str.replace(',', '.'), errors='coerce')
 
-        # --- Number of Papers per Year ---
+        # --- Top Länder für Linienplot ---
+        counts_total_line = df_clean.groupby('countries')['DOI'].nunique().reset_index(name='count')
+        counts_total_line['share'] = counts_total_line['count'] / total_papers
+        top_countries_line = counts_total_line.nlargest(top_n_line, 'share')['countries']
+
+        # --- Top Länder für Scatter-Plot insgesamt ---
+        counts_total_scatter = df_clean.groupby('countries')['DOI'].nunique().reset_index(name='count')
+        counts_total_scatter['share'] = counts_total_scatter['count'] / total_papers
+        top_countries_scatter = counts_total_scatter.nlargest(top_n_scatter, 'share')['countries']
+
+        # --- Linienplot (über Jahre) ---
         total_per_year = df_clean.groupby('publication_year')['DOI'].nunique()
+        counts_year = df_clean.groupby(['publication_year', 'countries'])['DOI'].nunique().reset_index(name='count')
+        counts_year['share'] = counts_year.apply(lambda row: row['count']/total_per_year[row['publication_year']], axis=1)
+        counts_top_year = counts_year[counts_year['countries'].isin(top_countries_line)]
+        pivot_share_year = counts_top_year.pivot(index='publication_year', columns='countries', values='share').fillna(0)
 
-        # --- Numbers of Country per Year ---
-        counts = df_clean.groupby(['publication_year', 'countries'])['DOI'].nunique().reset_index(name='count')
+        # --- Scatter-Plot Daten ---
+        df_top_scatter = df_clean[df_clean['countries'].isin(top_countries_scatter)].copy()
+        total_papers_with_country = df_clean['DOI'].nunique()
+        scatter_data = df_top_scatter.groupby('countries').agg(
+            share_of_paper=('DOI', lambda x: x.nunique() / total_papers_with_country),
+            average_sjr=('SJR', 'mean')
+        ).reset_index()
 
-        # --- Percentage per Year ---
-        counts['share'] = counts.apply(lambda row: row['count'] / total_per_year[row['publication_year']], axis=1)
-
-        # --- Top-6 Countries over all Years ---
-        top = counts.groupby('countries')['share'].sum().nlargest(top_n).index
-        counts_top = counts[counts['countries'].isin(top)]
-
-        # --- Pivot ---
-        pivot = counts_top.pivot(index='publication_year', columns='countries', values='share').fillna(0)
-
-        # --- Seaborn Style and Color Palette ---
-        colors = sns.color_palette("tab10", n_colors=len(pivot.columns))
 
         # --- Plot ---
-        fig, ax = plt.subplots(figsize=figsize)
-        for country, color in zip(pivot.columns, colors):
-            ax.plot(pivot.index, pivot[country]*100, marker='o', markersize=0, linewidth=2, label=country, color=color)
+        fig, axes = plt.subplots(1, 2, figsize=figsize)
 
-        #ax.set_title(f'Share of Publications per Year – Top {top_n} Countries')
-        ax.set_xlabel('Publication Year')
-        ax.set_ylabel('Share of Papers (%)')
-        ax.legend(title='Countries', bbox_to_anchor=legend_position, loc='upper left')
-        ax.grid(True, linestyle='--', linewidth=0.7, alpha=1)  # Dashed grid lines
-        fig.tight_layout()
-        
-        return fig, pivot
-    
+        # Linker Plot: Linienplot
+        for country in pivot_share_year.columns:
+            color = color_map.get(country) if color_map else None
+            axes[0].plot(pivot_share_year.index, pivot_share_year[country]*100,
+                        linestyle='-', marker='o', markersize=0, linewidth=2, label=country, color=color)
+        axes[0].set_title("a", loc='left', fontweight='bold')
+        axes[0].set_xlabel("Publication Year")
+        axes[0].set_ylabel("Share of Papers [%]")
+        axes[0].grid(True, linestyle='--', linewidth=0.7, alpha=0.9)
 
-    def journal_distribution(self, metadata_df: pd.DataFrame, col: str = "source", ylabel: str = "Journal",  top_n: int = 10, use_percentage=True, show_other=True, figsize: tuple=(10,6)):
-        """
-        Plot the distribution of papers across sources (journals) or host organizations (publishers) as a horizontal bar chart.
+        # Rechter Plot: Scatter-Plot mit Top-Ländern farbig, andere grau
+        for _, row in scatter_data.iterrows():
+            if row['countries'] in top_countries_line.tolist():
+                color = color_map.get(row['countries']) if color_map else None
+            else:
+                color = 'lightgray'
+            axes[1].scatter(row['share_of_paper']*100, row['average_sjr'], s=100, label=row['countries'] if color != 'lightgray' else None, color=color)
 
-        Args:
-            metadata_df (pd.DataFrame): DataFrame containing publication metadata with 'DOI', 'source', and 'host_organization'.
-            col (str, optional): The column which to use for the graphic
-            ylabel (str, optional): The label of the y-axes
-            top_n (int, optional): Number of top sources/publishers to display individually; the rest are grouped into 'Other'.
-            use_percentage(bool, optional): Wether to use the percentage of each journal or the total number of papers.
-            show_other(bool, optional): Wether to show the percentage/total number of the other journals.
-            figsize (tuple, optional): Figure size (width, height). Default is (10,6).
-        """
+        axes[1].set_title("b", loc='left', fontweight='bold')
+        axes[1].set_xlabel("Share of Papers [%]")
+        axes[1].set_ylabel("Average SJR")
+        axes[1].grid(True, linestyle='--', linewidth=0.7, alpha=0.9)
 
-        print(len(metadata_df))
-        # --- Count papers per source ---
-        counts = metadata_df.groupby(col)['DOI'].nunique().sort_values(ascending=False)
-        total = counts.sum()
-        print(total)
-        print(len(metadata_df))
-
-        print(len(counts))
-        # --- Leere oder fehlende Einträge entfernen (nicht anzeigen) ---
-        counts = counts[counts.index.notna()]           # entferne NaN
-        print(len(counts))
-        counts = counts[counts.index.str.strip() != ""] # entferne leere Strings
-        counts = counts.sort_values(ascending=False)
-
-        # --- Top N sources and group rest as 'Other' ---
-        top_counts = counts.head(top_n)
-        if show_other and len(counts) > top_n:
-            top_counts["Other"] = counts[top_n:].sum()
-        
-        if use_percentage:
-            top_counts = top_counts / total * 100
-            xlabel = "Percentage of Papers (%)"
+        # Gemeinsame Legende rechts (nur Top-Länder)
+        handles, labels = axes[1].get_legend_handles_labels()
+        if legend_bbox is not None:
+            fig.legend(handles, labels, loc='center', bbox_to_anchor=legend_bbox, frameon=True, title='Countries')
         else:
-            xlabel = "Number of Papers"
+            fig.legend(handles, labels, loc=legend_loc, frameon=True, title='Countries')
 
-        colors = ["steelblue"] * len(top_counts)
-        if "Other" in top_counts.index:
-            colors[0] = "lightgrey"
+        fig.tight_layout(rect=[0,0,0.85,1])  # Platz für Legend rechts
+        return fig, pivot_share_year, scatter_data
 
-        # --- Plot ---
-        fig, ax = plt.subplots(figsize=figsize)
-        ax.barh(top_counts.index[::-1], top_counts.values[::-1], color=colors)
-
-        # --- Achsen & Titel ---
-        ax.set_xlabel(xlabel)
-        ax.set_ylabel(ylabel)
-        ax.grid(True, linestyle='--', alpha=0.7)
-        fig.tight_layout()
-        return fig, top_counts
-    
-
-    def topics_distribution(self, metadata_df: pd.DataFrame, group_by: str = "topics", top_n: int = 10, use_percentage=True, show_other=True, figsize=(10,6)):
-        """
-        Plot the distribution of papers across topics as a horizontal bar chart.
-
-        Args:
-            metadata_df (pd.DataFrame): DataFrame with columns 'DOI' and 'topics' (list of topics).
-            group_by (str, optional): Whether to group by 'topics' or 'concepts'. Default is 'topics'.
-            top_n (int, optional): Number of top topics to display individually; the rest are grouped into 'Other'.
-            use_percentage (bool, optional): Show percentages instead of absolute counts.
-            show_other (bool, optional): Whether to group remaining topics into 'Other'.
-            figsize (tuple, optional): Figure size (width, height).
-        """
-
-        if group_by not in ["topics", "concepts"]:
-            raise ValueError("group_by must be either 'topics' or 'concepts'")
-        
-        # --- Expand lists in topics column ---
-        df_clean = metadata_df[metadata_df[group_by].str.len() > 0].explode(group_by)
-
-        # --- Count papers per topic ---
-        counts = df_clean.groupby(group_by)['DOI'].nunique().sort_values(ascending=False)
-        total = counts.sum()
-
-        # --- Top N + optional Other ---
-        top_counts = counts.head(top_n)
-        if show_other and len(counts) > top_n:
-            top_counts["Other"] = counts[top_n:].sum()
-
-        # --- Prozent oder absolute Werte ---
-        if use_percentage:
-            top_counts = top_counts / total * 100
-            xlabel = "Percentage of Papers (%)"
-        else:
-            xlabel = "Number of Papers"
-
-        # --- Farben: einheitlich Steelblue, Other hellgrau ---
-        colors = ["steelblue"] * len(top_counts)
-        if "Other" in top_counts.index:
-            colors[0] = "lightgrey"
-
-        # --- Plot ---
-        fig, ax = plt.subplots(figsize=figsize)
-        ax.barh(top_counts.index[::-1], top_counts.values[::-1], color=colors)
-
-        ax.set_xlabel(xlabel)
-        ax.set_ylabel(group_by.capitalize())
-        #ax.set_title(f"Distribution of Papers per {group_by.capitalize()}")
-
-        ax.grid(True, linestyle='--', alpha=0.7)
-        fig.tight_layout()
-        return fig
-    
 
     def keywords_distribution(self, quinex_df: pd.DataFrame, keywords: dict, column: str = "entity", figsize=(10,6)):
         """
@@ -227,79 +168,245 @@ class VisualisationMetadata():
         ax.grid(True, linestyle='--', alpha=0.7)
         fig.tight_layout()
         return fig, percentages
-    
+
+
+    def mention_trend_heatmap_multi_entities(
+        self,
+        dfs,
+        entity_col: str = "entity_base_mapping",
+        year_col: str = "publication_year",
+        titles=None,
+        top_n: int = 6,
+        figsize: tuple = (16, 6),
+        cmap: str = "viridis",
+        font_size: int = 12
+    ):
+        # --- Normalize input ---
+        if not isinstance(dfs, list):
+            dfs = [dfs]
+
+        n_plots = len(dfs)
+
+        if titles is None:
+            titles = [f"({chr(97+i)})" for i in range(n_plots)]
+
+        if len(titles) != n_plots:
+            raise ValueError("titles must have same length as dfs")
+
+        # --- Font size ---
+        mpl.rcParams.update({
+            'axes.titlesize': font_size,
+            'axes.labelsize': font_size,
+            'xtick.labelsize': font_size,
+            'ytick.labelsize': font_size
+        })
+
+        pivots = []
+        vmax_global = 0
+
+        # --- Prepare pivots ---
+        for df in dfs:
+            df = df.copy()
+            df = df[df[year_col].notnull()]
+            df[year_col] = df[year_col].astype(int)
+
+            total_per_year = df.groupby(year_col)['DOI'].nunique()
+
+            counts = (
+                df.groupby([year_col, entity_col])['DOI']
+                .nunique()
+                .reset_index(name='count')
+            )
+
+            counts['share'] = counts.apply(
+                lambda r: r['count'] / total_per_year[r[year_col]],
+                axis=1
+            )
+
+            top_entities = (
+                counts.groupby(entity_col)['share']
+                .sum()
+                .nlargest(top_n)
+                .index
+            )
+
+            pivot = (
+                counts[counts[entity_col].isin(top_entities)]
+                .pivot(index=entity_col, columns=year_col, values='share')
+                .fillna(0)
+            )
+
+            pivot = pivot.loc[pivot.mean(axis=1).sort_values(ascending=False).index]
+
+            pivots.append(pivot)
+            vmax_global = max(vmax_global, pivot.values.max())
+
+        # --- Grid-Layout: max 2 Spalten ---
+        n_cols = 2 if n_plots > 1 else 1
+        n_rows = math.ceil(n_plots / n_cols)
+
+        fig, axes = plt.subplots(
+            n_rows, n_cols,
+            figsize=(figsize[0], figsize[1]*n_rows),
+            gridspec_kw={'wspace': 0.4, 'hspace': 0.35}
+        )
+
+        # axes als flache Liste behandeln
+        if n_plots == 1:
+            axes = [axes]
+        else:
+            axes = axes.flatten()
+
+        for ax, pivot, title in zip(axes, pivots, titles):
+            sns.heatmap(
+                pivot,
+                ax=ax,
+                cmap=cmap,
+                vmin=0,
+                vmax=vmax_global,
+                cbar=False,
+                linewidths=0.5
+            )
+
+            ax.set_title(title, loc='left', fontweight='bold')
+            ax.set_xlabel("Publication Year")
+            ax.set_ylabel("Entity")
+
+            # X-Ticks: jede zweite
+            xticks = ax.get_xticks()
+            labels = [l.get_text() for l in ax.get_xticklabels()]
+            ax.set_xticks(xticks[::4])
+            ax.set_xticklabels(labels[::4], rotation=0)
+
+        # --- Leere Achsen ausblenden, falls n_plots ungerade ---
+        for ax in axes[n_plots:]:
+            ax.axis('off')
+
+        # --- Shared Colorbar ---
+        sm = ScalarMappable(
+            cmap=cmap,
+            norm=plt.Normalize(vmin=0, vmax=vmax_global)
+        )
+        sm.set_array([])
+
+        cbar = fig.colorbar(
+            sm,
+            ax=axes[:n_plots],
+            fraction=0.05,
+            pad=0.02,
+            shrink=0.5
+        )
+        cbar.set_label("Share of Papers [%]")
+        cbar.ax.yaxis.set_major_formatter(PercentFormatter(xmax=1))
+
+        fig.tight_layout()
+        return fig, pivots
 
     
-    def mention_trend_over_time(self, quinex_df: pd.DataFrame, keywords: dict, mention_col: str = "entity_base_mapping",
-                               year_col: str = "publication_year", top_n: int = 6,
-                               figsize: tuple = (12, 6), legend_position: tuple = (0.91, 1)):
+    def mention_trend_heatmap(
+        self,
+        quinex_df: pd.DataFrame,
+        entity_col: str = "entity_base_mapping",
+        property_col: str = "property_base_mapping",
+        year_col: str = "publication_year",
+        top_n: int = 6,
+        figsize: tuple = (16, 6),
+        cmap: str = "viridis",
+        font_size: int = 12
+    ):
         """
-        Plot the temporal share of mentions per year for selected technologies (based on keywords mapping).
+        Plot temporal share of mentions as heatmaps for entities and properties with:
+        - shared color scale
+        - Y-axis sorted by mean share
+        - X-axis ticks every 2 years
+        - one shared colorbar
 
         Args:
-            quinex_df (pd.DataFrame): DataFrame containing extracted entities and publication years.
-            keywords (dict): Dict containing technology keyword groups, e.g. {"battery": ["battery", "batteries", "accu"]}.
-            mention_col (str, optional): Column name containing entity text. Default is 'entity_base_mapping'.
-            year_col (str, optional): Column name containing publication year. Default is 'publication_year'.
-            top_n (int, optional): Number of top technologies to show. Default is 6.
-            figsize (tuple, optional): Figure size (width, height). Default is (12,6).
-            legend_position (tuple, optional): Position of legend anchor. Default is (0.91, 1).
+            quinex_df (pd.DataFrame): DataFrame with entity/property mentions and publication years.
+            entity_col (str): Column name for entities.
+            property_col (str): Column name for properties.
+            year_col (str): Column name for publication year.
+            top_n (int): Number of top entities/properties to include.
+            figsize (tuple): Figure size.
+            cmap (str): Colormap for heatmaps.
+            font_size (int): Font size for all plot elements.
         """
+
+        # --- Font size ---
+        mpl.rcParams.update({
+            'axes.titlesize': font_size,
+            'axes.labelsize': font_size,
+            'xtick.labelsize': font_size,
+            'ytick.labelsize': font_size
+        })
 
         df = quinex_df.copy()
         df = df[df[year_col].notnull()]
         df[year_col] = df[year_col].astype(int)
 
-        # --- Schritt 1: Keywords-Filter ---
-        all_keywords = [kw for kws in keywords.values() for kw in kws]
-        mask = df[mention_col].astype(str).str.lower().apply(lambda x: any(kw.lower() in x for kw in all_keywords))
-        df_filtered = df[mask].copy()
+        total_per_year = df.groupby(year_col)['DOI'].nunique()
 
-        # --- Schritt 2: Zuordnen zur Gruppe (z. B. battery, hydrogen, pv, ...) ---
-        def map_to_group(entity):
-            for group, kws in keywords.items():
-                for kw in kws:
-                    if kw.lower() in entity.lower():
-                        return group
-            return None
+        # --- Entities ---
+        counts_entity = df.groupby([year_col, entity_col])['DOI'].nunique().reset_index(name='count')
+        counts_entity['share'] = counts_entity.apply(
+            lambda row: row['count'] / total_per_year[row[year_col]], axis=1)
+        top_entities = counts_entity.groupby(entity_col)['share'].sum().nlargest(top_n).index
+        counts_entity = counts_entity[counts_entity[entity_col].isin(top_entities)]
+        pivot_entity = counts_entity.pivot(index=entity_col, columns=year_col, values='share').fillna(0)
+        pivot_entity = pivot_entity.loc[pivot_entity.mean(axis=1).sort_values(ascending=False).index]
 
-        df_filtered["mention_group"] = df_filtered[mention_col].apply(map_to_group)
+        # --- Properties ---
+        counts_property = df.groupby([year_col, property_col])['DOI'].nunique().reset_index(name='count')
+        counts_property['share'] = counts_property.apply(
+            lambda row: row['count'] / total_per_year[row[year_col]], axis=1)
+        top_properties = counts_property.groupby(property_col)['share'].sum().nlargest(top_n).index
+        counts_property = counts_property[counts_property[property_col].isin(top_properties)]
+        pivot_property = counts_property.pivot(index=property_col, columns=year_col, values='share').fillna(0)
+        pivot_property = pivot_property.loc[pivot_property.mean(axis=1).sort_values(ascending=False).index]
 
-        # --- Number of Papers er Year ---
-        total_per_year = df.groupby('publication_year')['DOI'].nunique()
+        # --- Gemeinsame Farbskala ---
+        vmax = max(pivot_entity.values.max(), pivot_property.values.max())
 
-        # --- Numbers of Mentions per Year ---
-        counts = df_filtered.groupby([year_col, 'mention_group'])['DOI'].nunique().reset_index(name='count')
+        # --- Plot Heatmaps ---
+        fig, axes = plt.subplots(1, 2, figsize=figsize, gridspec_kw={'width_ratios':[1,1], 'wspace':0.35})
 
-        # --- Percentage per Year ---
-        counts['share'] = counts.apply(lambda row: row['count'] / total_per_year[row['publication_year']], axis=1)
+        # Entities Heatmap
+        sns.heatmap(pivot_entity, ax=axes[0], cmap=cmap, vmin=0, vmax=vmax, cbar=False, linewidths=0.5)
+        axes[0].set_title("c", loc='left', fontweight='bold')
+        axes[0].set_xlabel("Publication Year")
+        axes[0].set_ylabel("Entity")
 
-        # --- Top-6 Mentions over all Years ---
-        top = counts.groupby('mention_group')['share'].sum().nlargest(top_n).index
-        counts_top = counts[counts['mention_group'].isin(top)]
+        # Properties Heatmap
+        sns.heatmap(pivot_property, ax=axes[1], cmap=cmap, vmin=0, vmax=vmax, cbar=False, linewidths=0.5)
+        axes[1].set_title("d", loc='left', fontweight='bold')
+        axes[1].set_xlabel("Publication Year")
+        axes[1].set_ylabel("Property")
+
+        # --- Gemeinsame Colorbar rechts ---
+        sm = ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=0, vmax=vmax))
+        sm.set_array([])
+        cbar = fig.colorbar(sm, ax=axes, fraction=0.05, pad=0.02)
+        cbar.set_label('Share of Papers [%]')
+        cbar.ax.yaxis.set_major_formatter(PercentFormatter(xmax=1))
+
+        # --- X-Ticks: nur jede zweite sichtbar, horizontal ---
+        for ax in axes:
+            xticks = ax.get_xticks()
+            labels = [item.get_text() for item in ax.get_xticklabels()]
+            new_ticks = []
+            new_labels = []
+            for i, label in enumerate(labels):
+                if i % 4 == 0:
+                    new_ticks.append(xticks[i])
+                    new_labels.append(label)
+            ax.set_xticks(new_ticks)
+            ax.set_xticklabels(new_labels, rotation=0)
 
 
-        # --- Pivot für Plot ---
-        pivot = counts_top.pivot(index=year_col, columns="mention_group", values="share").fillna(0)
-
-        # --- Farben & Stil ---
-        colors = sns.color_palette("tab10", n_colors=len(pivot.columns))
-        fig, ax = plt.subplots(figsize=figsize)
-
-        # --- Linien plotten ---
-        for entity, color in zip(pivot.columns, colors):
-            ax.plot(pivot.index, pivot[entity]*100, marker='o', markersize=0, linewidth=2, label=entity, color=color)
-
-        # --- Achsen & Formatierung ---
-        ax.set_xlabel("Publication Year")
-        ax.set_ylabel("Share of Papers (%)")
-        #ax.set_title(f"Temporal Share of Top {top_n} Technologies")
-        legend_title = 'Technology' if mention_col == 'entity' else 'Property'
-        ax.legend(title=legend_title, bbox_to_anchor=legend_position, loc="upper left")
-        ax.grid(True, linestyle='--', linewidth=0.7, alpha=0.9)
         fig.tight_layout()
+        return fig, pivot_entity, pivot_property
 
-        return fig, pivot
+
 
 
     def entity_property_sankey(self, df: pd.DataFrame, 
@@ -382,4 +489,109 @@ class VisualisationMetadata():
         fig.show()
 
         return fig, link_counts
+    
+    def add_sjr_to_metadata(
+        self,
+        metadata_df,
+        sjr_folder,
+        source_col='Source',
+        year_col='publication_year',
+        source_rename_dict=None
+    ):
+        """
+        Fügt dem metadata_df die SJR-Werte aus den SCImago CSVs hinzu.
+        Auch ein Abgleich bei Unterschieden nur durch ',' oder ':' wird durchgeführt.
+
+        Args:
+            metadata_df (pd.DataFrame): DataFrame mit Papers, muss Spalten source_col und year_col enthalten
+            sjr_folder (str): Ordner, in dem die SCImago CSVs liegen (2010 bis 2024)
+            source_col (str, optional): Spalte in metadata_df mit Journalnamen. Default 'Source'
+            year_col (str, optional): Spalte in metadata_df mit Jahr. Default 'publication_year'
+            source_rename_dict (dict, optional): Mapping für spezielle Journalnamen
+
+        Returns:
+            pd.DataFrame: metadata_df mit neuer Spalte 'SJR'
+        """
+
+        # ------------------------------------------------------------------
+        # 1. Alle SCImago CSVs einlesen
+        # ------------------------------------------------------------------
+        all_files = glob.glob(os.path.join(sjr_folder, "*.csv"))
+        sjr_list = []
+
+        for f in all_files:
+            df = pd.read_csv(f, sep=';', low_memory=False)
+
+            # Jahr aus Dateiname
+            year_match = re.search(r'\b(\d{4})\b', os.path.basename(f))
+            if not year_match:
+                raise ValueError(f"Jahr konnte nicht aus Dateiname {f} extrahiert werden")
+
+            year = int(year_match.group(1))
+            df['Year'] = year
+
+            # Journalnamen normalisieren
+            df['Title'] = df['Title'].str.upper().str.strip()
+
+            sjr_list.append(df[['Title', 'Year', 'SJR']])
+
+        sjr_all = pd.concat(sjr_list, ignore_index=True)
+
+        # ------------------------------------------------------------------
+        # 2. metadata_df vorbereiten
+        # ------------------------------------------------------------------
+        metadata_df_clean = metadata_df.copy()
+
+        metadata_df_clean[source_col] = (
+            metadata_df_clean[source_col]
+            .astype(str)
+            .str.upper()
+            .str.replace("&", "AND", regex=False)
+            .str.strip()
+        )
+
+        # 🔧 OPTIONAL: Source-Umbenennung
+        if source_rename_dict is not None:
+            source_rename_dict = {k.upper(): v.upper() for k, v in source_rename_dict.items()}
+            metadata_df_clean[source_col] = metadata_df_clean[source_col].replace(source_rename_dict)
+
+        # Falls SJR schon existiert → entfernen
+        if 'SJR' in metadata_df_clean.columns:
+            metadata_df_clean = metadata_df_clean.drop(columns=['SJR'])
+
+        # ------------------------------------------------------------------
+        # 3. Merge (normal)
+        # ------------------------------------------------------------------
+        merged = metadata_df_clean.merge(
+            sjr_all,
+            left_on=[source_col, year_col],
+            right_on=['Title', 'Year'],
+            how='left'
+        )
+
+        # ------------------------------------------------------------------
+        # 4. Nachträglicher Komma/Doppelpunkt-Abgleich für fehlende SJR
+        # ------------------------------------------------------------------
+        mask_missing = merged['SJR'].isna()
+        for idx in merged[mask_missing].index:
+            src = merged.at[idx, source_col]
+            year = merged.at[idx, year_col]
+            candidates = sjr_all[sjr_all['Year'] == year]['Title'].tolist()
+            for c in candidates:
+                src_clean = src.replace(',', '').replace(':', '').strip()
+                c_clean = c.replace(',', '').replace(':', '').strip()
+                if src_clean == c_clean:
+                    merged.at[idx, 'SJR'] = sjr_all.loc[
+                        (sjr_all['Title'] == c) & (sjr_all['Year'] == year),
+                        'SJR'
+                    ].values[0]
+                    break  # Match gefunden, weiter mit nächstem
+
+        # ------------------------------------------------------------------
+        # 5. Aufräumen
+        # ------------------------------------------------------------------
+        merged = merged.drop(columns=['Title', 'Year'])
+
+        return merged
+
 

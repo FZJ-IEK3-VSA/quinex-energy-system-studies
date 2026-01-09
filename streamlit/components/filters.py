@@ -26,18 +26,22 @@ def _render_mapping_filter(col_name):
             num_variants = len(variants)
             cols = st.columns([2] + [2]*num_variants + [0.5, 0.5, 0.5])
 
-            # ----- Master -----
+            # ----- Class -----     
             new_master = cols[0].text_input(
-                f"{col_name}_master_{row_idx}", value=master,
-                label_visibility="collapsed", placeholder="Master label"
+                f"{col_name}_master_{row_idx}",
+                value=master,
+                label_visibility="collapsed",
+                placeholder="Class label",
+                icon=":material/topic:"
             )
 
-            # ----- Variants -----
+            # ----- Keywords -----
             new_variants = []
             for i, v in enumerate(variants):
                 new_val = cols[i+1].text_input(
                     f"{col_name}_variant_{row_idx}_{i}", value=v,
-                    label_visibility="collapsed", placeholder="Variant"
+                    label_visibility="collapsed", placeholder=f"Keyword{i+1}",
+                    icon=":material/search:"
                 )
                 new_variants.append(new_val)
 
@@ -55,7 +59,8 @@ def _render_mapping_filter(col_name):
                         f"unit_{row_idx}",
                         value=unit_val,
                         label_visibility="collapsed",
-                        placeholder="Unit filter (e.g., kWh/kg)"
+                        placeholder="Unit filter (e.g., kWh/kg)",
+                        icon=":material/search:"
                     )
                     st.session_state.regex_groups["Unit"][row_idx][0] = new_unit
 

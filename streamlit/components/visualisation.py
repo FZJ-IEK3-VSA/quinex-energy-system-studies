@@ -24,7 +24,7 @@ def prepare_df(regex_filters, regex_mapping, total_rows):
 
 
 def render_temporal(total_rows, regex_filters, regex_mapping):
-    with st.expander("⚙️ Plot Settings"):
+    with st.expander("⚙️ Settings"):
         # --- Form starten ---
         with st.form("temporal_plot_form", border=False):
             col1, col2 = st.columns(2)
@@ -58,7 +58,7 @@ def render_temporal(total_rows, regex_filters, regex_mapping):
                 data_over_time.append({
                     'df': df_prop,
                     'entity_col': 'Entity Mapping',
-                    'value_col': 'Value Normalized',
+                    'value_col': 'Value Converted',
                     'ylabel': f"{prop_name} [{unit}]",
                     'title': label_prefix
                 })
@@ -113,8 +113,6 @@ def render_spatial(total_rows, regex_filters, regex_mapping):
             submitted = st.form_submit_button("Generate Spatial Plot")
 
     if submitted:
-        import time
-        
         # --- Daten vorbereiten ---
         df_all = prepare_df(regex_filters, regex_mapping, total_rows)
         df_all = vis.convert_spatial(df_all, spatial_col="Spatial Scope")
@@ -138,7 +136,7 @@ def render_spatial(total_rows, regex_filters, regex_mapping):
                 label_prefix = f"{alphabet_labels[idx]}) " if idx < len(alphabet_labels) else f"{idx+1}) "
                 data_list.append({
                     "df": df_entity,
-                    "value_column": "Value Normalized",
+                    "value_column": "Value Converted",
                     "title": f"{label_prefix}{entity}"
                 })
 

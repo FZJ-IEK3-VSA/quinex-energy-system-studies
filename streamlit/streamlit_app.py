@@ -1,7 +1,11 @@
+# Start: streamlit run streamlit/streamlit_app.py --server.address 0.0.0.0
+# Aufruf aus VPN: http://134.94.54.174:8501/
+# Lokal: http://127.0.0.1:8501/
 import os
 import streamlit as st
 from utils import duckdb_filter, style, unit_filter
 from components import header, dataframe_view, pagination_download, filters, visualisation
+
 
 # --- Setup ---
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__)))

@@ -4,7 +4,7 @@ import ast
 
 
 def style_dataframe(df):
-    highlight_cols = ['Entity Mapping', 'Property Mapping']
+    highlight_cols = ['Entity Mapping', 'Property Mapping', 'Unit Mapping', 'Value Converted']
 
     def highlight_cell(val):
         if val:
@@ -103,7 +103,9 @@ def render(df, rows_per_page):
         "Temporal Scope",
         "Spatial Scope",
         "Entity Mapping",
-        "Property Mapping"
+        "Property Mapping",
+        "Unit Mapping",
+        "Value Converted"
     ]
 
     # nur die existierenden Spalten auswählen (vermeidet Fehler, falls eine fehlt)

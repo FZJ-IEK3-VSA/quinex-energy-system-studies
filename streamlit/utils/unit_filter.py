@@ -21,67 +21,73 @@ unit_parser = st.session_state.unit_parser
 def apply_unit_filters(df: pd.DataFrame, regex_mapping: dict) -> pd.DataFrame:
     """
     Filtert Zeilen des DataFrames nach Unit, basierend auf Property Mapping.
-    - Fügt neue Spalten 'unit_converted' und 'unit_mapping' hinzu.
+    - Fügt neue Spalten 'Value Converted' und 'Unit Mapping' hinzu.
     - Entfernt Zeilen, bei denen unit_conversion nicht möglich ist.
     """
     df = df.copy()
-    df["unit_converted"] = None
-    df["unit_mapping"] = None
+    df["Value Converted"] = None
+    df["Unit Mapping"] = None
 
     # Unit-Filters nur anwenden, wenn vorhanden
-    unit_filters = regex_mapping.get("unit", [])
+    unit_filters = regex_mapping.get("Unit", [])
     property_filters = regex_mapping.get("Property", [])
 
     if not unit_filters or all((not u[0].strip()) for u in unit_filters):
         return df
 
 
-    filtered_rows = []
+    prop_to_unit = {}
+    for prop_row, unit_row in zip(property_filters, unit_filters):
+        prop = prop_row[0].strip() if prop_row and prop_row[0] else None
+        unit = unit_row[0].strip() if unit_row and unit_row[0] else None
+        if prop and unit:
+            prop_to_unit[prop] = unit
 
-    for idx, (prop_row, unit_row) in enumerate(zip(property_filters, unit_filters)):
-        prop_master = prop_row[0].strip()
-        to_unit_str = unit_row[0].strip()
-
-        if not prop_master or not to_unit_str:
-            continue
-
-        # Parse Target Unit
-        try:
-            to_unit = unit_parser.parse(to_unit_str)
-        except Exception:
-            continue
-
-        # Filter Zeilen, die diese Property betreffen
-        df_subset = df[df["Property Mapping"] == prop_master]
-
-        for _, row in df_subset.iterrows():
-            from_unit = row["Unit Normalized"]
-            if not from_unit:
-                continue
-            try:
-                unit_norm = normalize_unit_normalized(from_unit)
-                if not unit_norm:
-                    continue
-                
-                conv_value, conv_unit = unit_parser.unit_conversion(
-                    value=row["Value Normalized"],
-                    from_compound_unit=unit_norm,
-                    to_compound_unit=to_unit
-                )
-                if conv_value is None:
-                    continue
-
-                row["unit_converted"] = conv_value
-                row["unit_mapping"] = to_unit_str
-                filtered_rows.append(row)
-            except Exception:
-                continue
-
-    if filtered_rows:
-        return pd.DataFrame(filtered_rows).reset_index(drop=True)
-    else:
-        return pd.DataFrame(columns=df.columns)
+    if not prop_to_unit:
+        return df
     
+    df = df[df["Property Mapping"].isin(prop_to_unit.keys())].copy()
+    df["Target Unit"] = df["Property Mapping"].map(prop_to_unit)
+
+    df = df[
+        df["Unit Normalized"].notna()
+        & df["Value Normalized"].notna()
+    ].copy()
+
+    parsed_target_units = {}
+    for u in df["Target Unit"].unique():
+        try:
+            parsed_target_units[u] = unit_parser.parse(u)
+        except Exception:
+            parsed_target_units[u] = None
+
+    df["Parsed Target Unit"] = df["Target Unit"].map(parsed_target_units)
+
+    df = df[df["Parsed Target Unit"].notna()].copy()
+
+    def convert_row(row):
+        try:
+            from_unit = normalize_unit_normalized(row["Unit Normalized"])
+            if not from_unit:
+                return None, None
+
+            val, _ = unit_parser.unit_conversion(
+                value=row["Value Normalized"],
+                from_compound_unit=from_unit,
+                to_compound_unit=row["Parsed Target Unit"],
+            )
+            return val, row["Target Unit"]
+        except Exception:
+            return None, None
+    
+    converted = df.apply(convert_row, axis=1, result_type="expand")
+    df["Value Converted"] = converted[0]
+    df["Unit Mapping"] = converted[1]
+
+    df = df[df["Value Converted"].notna()].copy()
+
+    return df.reset_index(drop=True)
+
 
 def normalize_unit_normalized(unit_norm):
     """

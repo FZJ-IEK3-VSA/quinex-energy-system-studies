@@ -1,12 +1,11 @@
 import os
 import re
 import json
-import requests
 import pandas as pd
 
-class QuinexDiscussion():
+class RegexMapping():
     """
-    Prepares the Discusssion Data from the results observed using quinex.
+    Prepares the Discusssion Data from the results observed using quinex via regular expressions.
     """
     
     def __init__(self, entity_path, property_path):

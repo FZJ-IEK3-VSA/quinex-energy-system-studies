@@ -1,4 +1,4 @@
-from datetime import datetime, UTC
+from datetime import datetime, timezone
 from typing import List, Any
 from pymongo import MongoClient
 import pandas as pd
@@ -58,7 +58,7 @@ class MongoStore:
                         "$setOnInsert": {
                             "openalex_id": paper_id,
                             "analysis_result": None,
-                            "created_at": datetime.now(UTC).isoformat()
+                            "created_at": datetime.now(timezone.utc).isoformat()
                         }
                     },
                     upsert=True
@@ -74,7 +74,7 @@ class MongoStore:
                     {"_id": doi},
                     {
                         "$setOnInsert": {
-                            "created_at": datetime.now(UTC).isoformat()
+                            "created_at": datetime.now(timezone.utc).isoformat()
                         }
                     },
                     upsert=True
@@ -125,7 +125,7 @@ class MongoStore:
                     "$setOnInsert": {
                         "openalex_id": paper_id,
                         "analysis_result": None,
-                        "created_at": datetime.now(UTC).isoformat()
+                        "created_at": datetime.now(timezone.utc).isoformat()
                     }
                 },
                 upsert=True

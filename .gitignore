@@ -5,3 +5,4 @@ notebooks/test.ipynb
 .env
 streamlit/components/__pycache__/*
 streamlit/utils/__pycache__/*
+notebooks/cached_predicted_geo_coordinates.json

@@ -13,32 +13,36 @@ Modules:
 """
 
 # Core visualization classes
-from .metadata_visualisation import VisualisationMetadata
-from .quinex_visualisation import QuinexVisualisation
+from .visualisation.metadata_visualisation import VisualisationMetadata
+from .visualisation.quinex_visualisation import QuinexVisualisation
 
 # Utility modules
-from . import plot_utils
-from . import data_processing
-from . import country_codes
+from .visualisation import plot_utils
+from .postprocessing import data_processing
+from .postprocessing import country_codes
 
 # Re-export commonly used functions
-from .plot_utils import (
+from .visualisation.plot_utils import (
     setup_plotting_environment,
     set_font_sizes,
     style_legend_frame,
 )
 
-from .data_processing import (
+from .postprocessing.data_processing import (
     apply_iqr_filter,
     calculate_aggregates,
     parse_temporal_scope,
     parse_spatial_scope,
 )
 
-from .country_codes import (
+from .postprocessing.country_codes import (
     ISO3_TO_ISO2,
     ISO2_TO_ISO3,
     CONTINENT_BOUNDS,
+)
+
+from .postprocessing.spatial_normalization import (
+    SpatialNormalization
 )
 
 __all__ = [
@@ -64,4 +68,7 @@ __all__ = [
     'ISO3_TO_ISO2',
     'ISO2_TO_ISO3',
     'CONTINENT_BOUNDS',
+    
+    # Spatial Normalization
+    'SpatialNormalization',
 ]

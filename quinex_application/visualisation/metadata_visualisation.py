@@ -17,14 +17,14 @@ import seaborn as sns
 from matplotlib.cm import ScalarMappable
 from matplotlib.ticker import PercentFormatter
 
-from .country_codes import ISO3_TO_ISO2
-from .plot_utils import (
+from quinex_application.postprocessing.country_codes import ISO3_TO_ISO2
+from quinex_application.visualisation.plot_utils import (
     set_font_sizes,
     setup_plotting_environment,
     flatten_axes,
     hide_empty_axes,
 )
-from .data_processing import map_to_keyword_group
+from quinex_application.postprocessing.data_processing import map_to_keyword_group
 
 
 class VisualisationMetadata:

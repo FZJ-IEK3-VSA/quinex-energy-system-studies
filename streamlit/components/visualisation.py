@@ -8,7 +8,8 @@ from utils import duckdb_filter, unit_filter
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__)))
 sys.path.append(os.path.abspath(os.path.join(BASE_DIR, "..", "..")))
 
-from quinex_application.quinex_visualisation import QuinexVisualisation  # Klasse mit den Plot-Funktionen
+
+from quinex_application.visualisation.quinex_visualisation import QuinexVisualisation  # Klasse mit den Plot-Funktionen
 
 if 'vis' not in st.session_state:
     st.session_state.vis = QuinexVisualisation()
@@ -143,7 +144,7 @@ def render_spatial(total_rows, regex_filters, regex_mapping):
             colorbar_title = f"{prop_name} [{unit}]"
 
             # --- Plot erzeugen ---
-            fig = vis.plot_multiple_datasets_on_world(
+            fig, _ = vis.plot_multiple_datasets_on_world(
                 data_list,
                 colorbar_title=colorbar_title,
                 figsize=(width, height),

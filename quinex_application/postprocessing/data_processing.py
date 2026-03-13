@@ -6,82 +6,176 @@ aggregation, and transformation operations used across visualization modules.
 """
 
 import ast
-import requests
 import numpy as np
 import pandas as pd
 import scipy.stats as st
+
+from quinex_utils.parsers.unit_parser import FastSymbolicUnitParser
+unit_parser = FastSymbolicUnitParser(load_ucum_codes=True)
+
 
 
 # =============================================================================
 # Unit Conversion
 # =============================================================================
 
+def _normalize_unit_to_tuples(unit_data: list) -> list:
+    """
+    Convert unit data from dict format to tuple format.
+    
+    Args:
+        unit_data: List of dicts with keys: text, exponent, unit_uri, year
+        
+    Returns:
+        List of tuples [(text, exponent, uri, year), ...]
+    """
+    if not isinstance(unit_data, list):
+        return []
+    
+    tuples = []
+    for item in unit_data:
+        if isinstance(item, dict):
+            tuples.append((
+                item.get("text"),
+                float(item.get("exponent", 1.0)) if item.get("exponent") is not None else 1.0,
+                item.get("unit_uri"),
+                item.get("year")
+            ))
+        elif isinstance(item, tuple):
+            tuples.append(item)
+    
+    return tuples
+
+
+def _preprocess_unit(unit_list: list) -> list:
+    """
+    Preprocess unit list: Update old currency URIs to new format.
+    
+    Args:
+        unit_list: List of tuples [(text, exponent, uri, year), ...]
+        
+    Returns:
+        Preprocessed unit list with updated URIs and years set to None
+    """
+    processed = []
+    for text, exponent, uri, unit_year in unit_list:
+        # Update old currency URI format to new format
+        if uri and "currency" in uri:
+            # Extract currency code from old format: http://qudt.org/vocab/currency/USD
+            code = uri.rsplit("/", 1)[-1]
+            # Create new URI format: http://qudt.org/vocab/unit/CCY_USD
+            uri = f"http://qudt.org/vocab/unit/CCY_{code}"
+            # Set year to None (will be handled by from_default_year/to_default_year)
+            unit_year = None
+        
+        processed.append((text, exponent, uri, unit_year))
+    
+    return processed
+
+
 def convert_unit(
     value: float,
-    input_unit: str,
-    output_unit: str,
-    year: int,
-    parse: bool = False,
-    api_url: str = "http://134.94.117.230:8000/api/units/convert_units/"
-) -> dict:
+    input_unit: list,
+    output_unit: list,
+    input_year: int = None,
+    output_year: int = None
+) -> tuple:
     """
-    Convert a value from one unit to another using the quinex API.
+    Convert a value from one unit to another using quinex_utils unit_parser.
     
     Args:
         value: Numeric value to convert.
-        input_unit: Source unit string.
-        output_unit: Target unit string.
-        year: Year for time-dependent conversions.
-        parse: Whether to parse the units.
-        api_url: URL of the conversion API.
+        input_unit: Source unit as list of tuples [(text, exponent, uri, year), ...]
+        output_unit: Target unit as list of tuples [(text, exponent, uri, year), ...]
+        input_year: Year for input unit (passed as from_default_year)
+        output_year: Year for output unit (passed as to_default_year)
         
     Returns:
-        API response as dictionary.
+        Tuple of (converted_value, converted_unit_data)
     """
-    payload = {
-        "value": value,
-        "input_unit": str(input_unit),
-        "output_unit": str(output_unit),
-        "year": year,
-        "parse": parse,
-    }
-    response = requests.post(api_url, json=payload)
-    return response.json()
+    # Preprocess units: Update currency URIs
+    input_unit = _preprocess_unit(input_unit)
+    output_unit = _preprocess_unit(output_unit)
+    
+    # Perform conversion with years as default parameters
+    conv_value, conv_unit_data = unit_parser.unit_conversion(
+        value=value,
+        from_compound_unit=input_unit,
+        to_compound_unit=output_unit,
+        from_default_year=input_year,
+        to_default_year=output_year
+    )
+
+    
+    return conv_value, conv_unit_data
 
 
 def convert_row(
     row: pd.Series,
-    target_unit: str,
-    year: int = None,
+    target_unit,
+    target_year: int = None,
     unit_col: str = "unit_normalized",
     value_col: str = "value_normalized",
-    year_col: str = "publication_year"
+    year_col: str = "publication_year",
+    temporal_scope_col: str = "temporal_scope"
 ) -> float:
     """
     Convert a DataFrame row's value to a target unit.
     
     Args:
         row: DataFrame row with unit and value columns.
-        target_unit: Target unit for conversion.
-        year: Override year for conversion. If None, uses row's year.
-        unit_col: Column name for input unit.
+        target_unit: Target unit - either a string to parse or list of tuples.
+        target_year: Year for target unit. If None, uses row's year.
+        unit_col: Column name for input unit (list of dicts or tuples).
         value_col: Column name for value.
-        year_col: Column name for year.
+        year_col: Column name for publication year.
+        temporal_scope_col: Column name for temporal scope.
         
     Returns:
         Converted value or None if conversion fails.
     """
-    input_unit = row[unit_col]
+    input_unit_data = row[unit_col]
     value = row[value_col]
-    conversion_year = year if year else row[year_col]
     
     if pd.isna(value):
         return None
     
+    # Determine input year from temporal_scope, fallback to publication_year
+    input_year = None
+    if temporal_scope_col in row.index and pd.notna(row[temporal_scope_col]):
+        temporal_scope = row[temporal_scope_col]
+        if isinstance(temporal_scope, dict):
+            input_year = int(temporal_scope.get('year'))
+        elif isinstance(temporal_scope, str):
+            try:
+                temporal_dict = ast.literal_eval(temporal_scope)
+                input_year = int(temporal_dict.get('year'))
+            except:
+                pass
+    
+    if input_year is None:
+        input_year = row[year_col]
+    
+    # Use target_year if provided, otherwise use input_year
+    output_year = target_year if target_year is not None else input_year
+    
+    # Convert input unit to tuple format if needed
+    input_unit = _normalize_unit_to_tuples(input_unit_data)
+    
+    # Handle target_unit: parse if string, use directly if list
+    if isinstance(target_unit, str):
+        output_unit = unit_parser.parse(target_unit)
+    elif isinstance(target_unit, list):
+        output_unit = target_unit
+    else:
+        print(f"Invalid target_unit type: {type(target_unit)}")
+        return None
+    
     try:
-        result = convert_unit(value, input_unit, target_unit, conversion_year, False)
-        return result[0]
-    except Exception:
+        result, _ = convert_unit(value, input_unit, output_unit, input_year, output_year)
+        return result
+    except Exception as e:
+        print(f"Conversion error for {row.name}: {e}")
         return None
 
 
@@ -207,7 +301,7 @@ def parse_spatial_scope(
     """
     df = df[df[spatial_col].notna()].copy()
     
-    df['spatial_scope'] = df[spatial_col].apply(
+    df[spatial_col] = df[spatial_col].apply(
         lambda x: x if isinstance(x, dict)
         else ast.literal_eval(x) if isinstance(x, str)
         else {'country': None, 'latitude': None, 'longitude': None}
@@ -218,6 +312,9 @@ def parse_spatial_scope(
     )
     df['longitude'] = df[spatial_col].apply(
         lambda x: float(x['longitude']) if isinstance(x, dict) and 'longitude' in x else None
+    )
+    df['country'] = df[spatial_col].apply(
+        lambda x: x.get('country') if isinstance(x, dict) else None
     )
     
     return df

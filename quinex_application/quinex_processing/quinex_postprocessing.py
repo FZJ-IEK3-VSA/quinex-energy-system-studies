@@ -1,6 +1,39 @@
 import os
-import json
 import pandas as pd
+import threading
+import logging
+from quinex_utils.parsers.quantity_parser import FastSymbolicQuantityParser
+from quinex_utils.parsers.unit_parser import FastSymbolicUnitParser
+
+logging.basicConfig(level=logging.WARNING)
+
+
+# --- Module-level worker loop for queue-based subprocess parsing ---
+def _worker_loop(in_q, out_q):
+    """Runs in a subprocess: initializes parser once, then processes texts from in_q."""
+    try:
+        instance = QuinexPostprocessing()
+        out_q.put("ready")
+    except Exception as e:
+        out_q.put(f"error:{e}")
+        return
+
+    while True:
+        text = in_q.get()
+        if text is None:  # sentinel to stop
+            break
+        try:
+            parsed = instance.quantity_parser.parse(text)
+            value, unit = instance.extract_value_and_unit(parsed)
+            if value is not None:
+                value = float(value)
+            out_q.put((value, unit))
+        except (OverflowError, ValueError, TypeError):
+            out_q.put((None, None))
+        except Exception:
+            out_q.put((None, None))
+
+
 
 class QuinexPostprocessing():
     """
@@ -13,6 +46,9 @@ class QuinexPostprocessing():
         """
 
         pd.set_option('display.max_colwidth', None)
+        pd.set_option('display.float_format', lambda x: f'{x:.10g}' if x != 0 else '0.0')
+        self.quantity_parser = FastSymbolicQuantityParser()
+        self.unit_parser = FastSymbolicUnitParser()
 
     # ----------------------------------- Functions for Saving Analysis-----------------------------------------------------------
 
@@ -67,10 +103,17 @@ class QuinexPostprocessing():
         prop = claim.get("property", {}).get("text", "")
 
         temporal_scope = qualifiers.get("temporal_scope", {}).get("normalized", {'year': None})
-        temporal = {"year": temporal_scope.get("year", pd.NA)} if temporal_scope.get("year", pd.NA) else pd.NA
+        temporal = {
+            "year": temporal_scope.get("year", pd.NA)
+            } if temporal_scope.get("year", pd.NA) else pd.NA
 
         spatial_scope = qualifiers.get("spatial_scope", {}).get("normalized", {'country': None, 'country_code': None, 'latitude': None, 'longitude': None, 'osm_place_id': None})
-        spatial = {"country": spatial_scope.get("country", pd.NA), "latitude": spatial_scope.get("latitude", pd.NA), "longitude": spatial_scope.get("longitude", pd.NA)} if spatial_scope.get("latitude", pd.NA) and spatial_scope.get("longitude", pd.NA)  else pd.NA
+        spatial = {
+            "text": qualifiers.get("spatial_scope", {}).get("text", pd.NA),
+            "country": spatial_scope.get("country", pd.NA), 
+            "latitude": spatial_scope.get("latitude", pd.NA), 
+            "longitude": spatial_scope.get("longitude", pd.NA)
+            } if spatial_scope.get("latitude", pd.NA) and spatial_scope.get("longitude", pd.NA)  else pd.NA
         
         classification = {
             "type": statement_classification.get("type", {}).get("class", pd.NA),
@@ -80,7 +123,7 @@ class QuinexPostprocessing():
 
         quantity_modifier = [q["value"]["normalized"]["modifiers"] for q in claim.get("quantity", {}).get("normalized", {}).get("individual_quantities", {}).get("normalized", [])]
         quantity = claim.get("quantity", {}).get("text", "")
-        combined_quantity = f"{", ".join(set(quantity_modifier))} {quantity}".strip()
+        combined_quantity = f'{", ".join(set(quantity_modifier))} {quantity}'.strip()
         quantity_type = claim.get("quantity", {}).get("normalized", {}).get("type", {}).get("class", "")
 
         quantity_normalized = claim.get("quantity", {}).get("normalized", {}).get("individual_quantities", {}).get("normalized", [])
@@ -308,3 +351,190 @@ class QuinexPostprocessing():
             if isinstance(v, str):
                 return True
         return False
+
+    def _extract_units_from_source(self, unit_source):
+        """Extract normalized unit dicts from a single quantity source."""
+        unit_normalized = []
+        prefixed_unit = unit_source.get("prefixed_unit")
+        if prefixed_unit and prefixed_unit.get("normalized"):
+            unit_normalized.extend(
+                [{"text": t[0], "exponent": t[1], "unit_uri": t[2], "year": t[3]} for t in prefixed_unit["normalized"]]
+            )
+        suffixed_unit = unit_source.get("suffixed_unit")
+        if suffixed_unit and suffixed_unit.get("normalized"):
+            unit_normalized.extend(
+                [{"text": t[0], "exponent": t[1], "unit_uri": t[2], "year": t[3]} for t in suffixed_unit["normalized"]]
+            )
+        return unit_normalized
+
+    def extract_value_and_unit(self, parsed):
+        """Extract averaged value and unit from quantity_parser.parse output."""
+        
+        if not parsed or not parsed.get("normalized_quantities"):
+            return None, None
+
+        quantities = parsed["normalized_quantities"]
+
+        if parsed["type"] in ["range", "list"] and len(quantities) >= 2:
+            values = [q["value"]["normalized"]["numeric_value"] for q in quantities
+                      if q["value"]["normalized"]["numeric_value"] is not None]
+            avg_value = sum(values) / len(values) if values else None
+
+            # Collect units from all quantities, ignoring UNITLESS entries
+            all_units = []
+            for q in quantities:
+                units = self._extract_units_from_source(q)
+                if units:
+                    all_units.append(units)
+
+            if not all_units:
+                unit_normalized = [{"text": None, "exponent": None, "unit_uri": 'http://qudt.org/vocab/unit/UNITLESS', "year": None}]
+            elif all(u == all_units[0] for u in all_units):
+                # All units are identical → take as-is
+                unit_normalized = all_units[0]
+            else:
+                # Units differ → merge all unique unit dicts
+                seen = set()
+                unit_normalized = []
+                for units in all_units:
+                    for d in units:
+                        key = (d["text"], d["exponent"], d["unit_uri"], d["year"])
+                        if key not in seen:
+                            seen.add(key)
+                            unit_normalized.append(d)
+        else:
+            avg_value = quantities[0]["value"]["normalized"]["numeric_value"]
+            unit_normalized = self._extract_units_from_source(quantities[0])
+
+        # Wenn keine Units gefunden wurden, UNITLESS setzen
+        if not unit_normalized:
+            unit_normalized = [{"text": None, "exponent": None, "unit_uri": 'http://qudt.org/vocab/unit/UNITLESS', "year": None}]
+
+        return avg_value, unit_normalized
+
+
+    def apply_quantity_parsing(self, row):
+        text = row["quantity_text"]
+        if not isinstance(text, str) or not text.strip():
+            return pd.Series({"value_normalized_adapted": None, "unit_normalized_adapted": None})
+        
+        result = {"value": None, "unit": None}
+        exception_occurred = False
+        
+        def parse_with_timeout():
+            nonlocal result, exception_occurred
+            try:
+                parsed = self.quantity_parser.parse(text)
+                value, unit = self.extract_value_and_unit(parsed)
+                if value is not None:
+                    value = float(value)
+                result = {"value": value, "unit": unit}
+            except (OverflowError, ValueError, TypeError) as e:
+                exception_occurred = True
+                result = {"value": None, "unit": None}
+        
+        # Run parse with 5 second timeout
+        thread = threading.Thread(target=parse_with_timeout, daemon=True)
+        thread.start()
+        thread.join(timeout=5.0)
+        
+        if thread.is_alive():
+            logging.warning(f"Parsing timeout for text: {text[:100]}...")
+            result = {"value": None, "unit": None}
+        
+        return pd.Series({"value_normalized_adapted": result["value"], "unit_normalized_adapted": result["unit"]})
+
+    def parse_batch_with_timeout(self, texts, timeout=5, desc="Parsing"):
+        """
+        Parse a list of quantity texts using a persistent worker subprocess.
+        The subprocess initializes once (expensive) and processes texts via queues.
+        Only on a real hang (timeout) is the worker killed and restarted.
+        """
+        import multiprocessing as mp
+        import queue as stdlib_queue
+        from tqdm.auto import tqdm
+
+        def start_worker():
+            in_q = mp.Queue()
+            out_q = mp.Queue()
+            p = mp.Process(target=_worker_loop, args=(in_q, out_q), daemon=True)
+            p.start()
+            try:
+                signal = out_q.get(timeout=120)  # allow up to 2 min for init
+                if isinstance(signal, str) and signal.startswith("error:"):
+                    p.terminate()
+                    raise RuntimeError(f"Worker init failed: {signal}")
+            except stdlib_queue.Empty:
+                p.terminate()
+                raise RuntimeError("Worker failed to initialize within 120 seconds")
+            return p, in_q, out_q
+
+        worker, in_q, out_q = start_worker()
+        results = []
+
+        for text in tqdm(texts, desc=desc):
+            if not isinstance(text, str) or not text.strip():
+                results.append((None, None))
+                continue
+
+            in_q.put(text)
+            try:
+                result = out_q.get(timeout=timeout)
+                results.append(result)
+            except stdlib_queue.Empty:
+                logging.warning("Parsing timeout for text: %s...", str(text)[:100])
+                worker.terminate()
+                worker.join()
+                worker, in_q, out_q = start_worker()
+                results.append((None, None))
+
+        in_q.put(None)  # sentinel to stop worker cleanly
+        worker.join(timeout=5)
+        if worker.is_alive():
+            worker.terminate()
+
+        return results
+    
+    def apply_unit_dimension_parsing(self, df):
+        """
+        Adds a 'unit_dimension_adapted' column to df based on 'unit_normalized'.
+
+        Args:
+            df (pd.DataFrame): DataFrame with a 'unit_normalized' column containing
+                lists of dicts with keys: text, exponent, unit_uri, year.
+
+        Returns:
+            pd.DataFrame: df with the additional 'unit_dimension_adapted' column.
+        """
+
+        def get_dimension(unit_normalized):
+            import json
+            if isinstance(unit_normalized, str):
+                try:
+                    unit_normalized = json.loads(unit_normalized)
+                except (json.JSONDecodeError, ValueError):
+                    return None
+            if not isinstance(unit_normalized, (list, tuple)) or len(unit_normalized) == 0:
+                return None
+            try:
+                parsed = [(d["text"], d["exponent"], d["unit_uri"], d["year"]) for d in unit_normalized]
+
+                if len(parsed) > 1:
+                    info = self.unit_parser.get_compound_unit_conversion_info(parsed)
+                    return str(info[1])  # dimension_vector
+
+                if len(parsed) == 1:
+                    baseunit = parsed[0][2]
+                    info = self.unit_parser.unit_dimensions_and_kinds.get(baseunit)
+                    if info:
+                        return str(info["dimension_vector"])
+            except Exception:
+                return None
+            return None
+
+        from tqdm.auto import tqdm
+        tqdm.pandas(desc="Parsing unit dimensions")
+
+        df = df.copy()
+        df["unit_dimension_adapted"] = df["unit_normalized_adapted"].progress_apply(get_dimension)
+        return df

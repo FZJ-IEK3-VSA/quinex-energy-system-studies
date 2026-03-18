@@ -9,6 +9,7 @@ import numpy as np
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.lines as mlines
+import matplotlib.patches as mpatches
 import seaborn as sns
 
 
@@ -171,10 +172,19 @@ def create_size_legend(
         legend_values = [n_values[0]] if len(n_values) == 1 else []
 
     handles = [
-        ax.scatter([], [], s=scale_size(n), color=color, alpha=alpha, label=f'n = {n}')
+        mlines.Line2D(
+            [], [],
+            marker='o',
+            linestyle='None',
+            markersize=np.sqrt(scale_size(n)),
+            markerfacecolor=color,
+            markeredgecolor='none',
+            alpha=alpha,
+            label=f'n = {n}'
+        )
         for n in legend_values
     ]
-    
+
     return handles
 
 

@@ -53,6 +53,7 @@ DEFAULT_ENTITY_COLORS = {
     "Lithium-Ion Battery": "#ff0000",
     "Lead Acid Battery": "#4E0000",
     "PV": "#ffd700",
+    "Utility-Scale PV": "#ff9900",
     "Wind Turbine": "#1e90ff",
     "Wind": "#1e90ff",
     "Onshore Wind": "#8bc5ff",
@@ -413,7 +414,7 @@ class QuinexVisualisation:
                 color = color_dict.get(entity, 'gray')
                 ax.plot(
                     entity_df['year'], entity_df['value'],
-                    color=color, linestyle='--', linewidth=3, alpha=0.8
+                    color=color, linestyle='--', linewidth=6, alpha=0.8
                 )
 
         if ax.get_legend() is not None:
@@ -535,6 +536,10 @@ class QuinexVisualisation:
               to highlight with distinct colors. All others shown as grey "Others".
             - 'x_range' (tuple): For plot_mode='size'. Explicit (min, max) limits for the
               x-axis (GHI axis), e.g. (0, 8). If not set, matplotlib auto-scales.
+            - 'min_datapoints' (int): For plot_mode='size'. Minimum number of data
+              points a country must have to appear in the bubble chart (default: 1).
+            - 'show_regression' (bool): For plot_mode='size'. Whether to draw an OLS
+              regression line through all plotted countries (default: False).
         
         Args:
             datasets: List of dicts with 'df', 'value_column', 'entity_column',
@@ -629,6 +634,8 @@ class QuinexVisualisation:
                             font_size=font_size,
                             highlight_countries=data.get('highlight_countries'),
                             x_range=data.get('x_range'),
+                            min_datapoints=data.get('min_datapoints', 1),
+                            show_regression=data.get('show_regression', False),
                         )
                         if scatter_data is not None:
                             title = data.get('title', f'size_plot_{i}')
@@ -975,6 +982,8 @@ class QuinexVisualisation:
         font_size: int = 14,
         highlight_countries: list = None,
         x_range: tuple = None,
+        min_datapoints: int = 1,
+        show_regression: bool = False,
     ):
         """
         Plot a 2D bubble chart: GHI (x) vs. aggregated value (y), sized by data point count.
@@ -994,6 +1003,10 @@ class QuinexVisualisation:
                 If None, auto-selects top/bottom countries.
             x_range: Optional (min, max) tuple for the x-axis (GHI). If None,
                 matplotlib auto-scales.
+            min_datapoints: Minimum number of data points a country must have
+                to appear in the chart. Countries below this threshold are excluded.
+            show_regression: If True, draw an OLS regression line through all
+                plotted points.
 
         Returns:
             DataFrame with scatter data (country, avg_value, n_datapoints, ghi) or None.
@@ -1024,6 +1037,14 @@ class QuinexVisualisation:
             'avg_value': country_avg.values,
             'n_datapoints': country_count.values,
         })
+
+        # Apply min_datapoints filter
+        if min_datapoints > 1:
+            scatter_df = scatter_df[scatter_df['n_datapoints'] >= min_datapoints]
+
+        if scatter_df.empty:
+            ax.set_visible(False)
+            return None
 
         # Add GHI data
         scatter_df['ghi'] = scatter_df['country'].map(ghi_data)
@@ -1098,6 +1119,19 @@ class QuinexVisualisation:
                     c=color, label=country_code, zorder=3,
                 )
 
+        # Regression line
+        if show_regression and len(scatter_df) >= 2:
+            x_reg = scatter_df['ghi'].values
+            y_reg = scatter_df['avg_value'].values
+            coeffs = np.polyfit(x_reg, y_reg, 1)
+            x_line = np.linspace(x_reg.min(), x_reg.max(), 200)
+            y_line = np.polyval(coeffs, x_line)
+            ax.plot(
+                x_line, y_line,
+                color='black', linewidth=1.5, linestyle='--',
+                label=f'Regression (slope={coeffs[0]:.2f})', zorder=4,
+            )
+
         # Styling
         ax.set_xlabel('Solar Radiation GHI [kWh/m²/day]', fontsize=font_size - 1)
         ax.set_ylabel(title if title else 'Value', fontsize=font_size - 1)
@@ -1125,6 +1159,11 @@ class QuinexVisualisation:
                        color=others_color, markeredgecolor='black', markeredgewidth=0.5,
                        alpha=0.5, label='Others')
         )
+        if show_regression and len(scatter_df) >= 2:
+            color_handles.append(
+                plt.Line2D([0], [0], linestyle='--', linewidth=1.5,
+                           color='black', label=f'Regression (slope={coeffs[0]:.2f})')
+            )
 
         # Second: bubble size legend (min and max)
         legend_counts = [counts.min(), counts.max()]

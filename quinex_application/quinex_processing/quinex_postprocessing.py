@@ -170,6 +170,14 @@ class QuinexPostprocessing():
 
         text_quote = self.get_quote()
 
+        ref_normalized = qualifiers.get("reference", {}).get("normalized", []) or []
+        references = [
+            {"title": bib.get("title") or "", "venue": bib.get("venue") or ""}
+            for ref_entry in ref_normalized
+            for bib in (ref_entry.get("bib_entries") or [])
+            if bib is not None
+        ] or None
+
         records.append({
             "publication_year": self.year,
             "DOI": self.doi,
@@ -183,6 +191,7 @@ class QuinexPostprocessing():
             "quote": text_quote,
             "temporal_scope": temporal,
             "spatial_scope": spatial,
+            "references": references,
         })
         return records
     

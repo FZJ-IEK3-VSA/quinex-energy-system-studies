@@ -468,7 +468,7 @@ def _aggregate_moving_average(
     window: int = 3
 ) -> pd.DataFrame:
     """Calculate moving average aggregates."""
-    all_years = pd.DataFrame({year_col: range(df[year_col].min(), df[year_col].max() + 1)})
+    all_years = pd.DataFrame({year_col: range(int(df[year_col].min()), int(df[year_col].max()) + 1)})
     entities = df[group_col].unique()
     full_index = pd.MultiIndex.from_product(
         [all_years[year_col], entities], 
@@ -614,3 +614,30 @@ def calculate_total_shares(
     counts['share'] = counts['count'] / total_papers
     
     return counts
+
+
+# =============================================================================
+# Investigate Data
+# =============================================================================
+def reference_contains_term(ref, term="IRENA"):
+    term = term.lower()
+    
+    # String → parsen
+    if isinstance(ref, str):
+        try:
+            ref = ast.literal_eval(ref)
+        except:
+            return False
+    
+    # ndarray → in list umwandeln
+    if isinstance(ref, np.ndarray):
+        ref = ref.tolist()
+    
+    if isinstance(ref, list):
+        return any(
+            term in str(d.get("title", "")).lower()
+            or term in str(d.get("venue", "")).lower()
+            for d in ref
+        )
+    
+    return False

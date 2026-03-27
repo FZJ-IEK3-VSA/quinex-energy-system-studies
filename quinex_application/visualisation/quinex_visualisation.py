@@ -19,7 +19,7 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import cartopy.io.shapereader as shpreader
 
-from quinex_application.postprocessing.country_codes import CONTINENT_BOUNDS, normalize_country_code, convert_iso3_to_iso2
+from quinex_application.postprocessing.country_codes import CONTINENT_BOUNDS, normalize_country_code
 from quinex_application.visualisation.plot_utils import (
     set_font_sizes,
     setup_plotting_environment,
@@ -41,6 +41,7 @@ from quinex_application.postprocessing.data_processing import (
     parse_spatial_scope,
     apply_jitter_to_datasets,
     calculate_aggregates,
+    reference_contains_term
 )
 
 
@@ -61,6 +62,9 @@ DEFAULT_ENTITY_COLORS = {
     "Hydrogen": "#46250f",
     "Electrolyzer": "#32cd32",
     "Coal": "#ff69b4",
+    "GB": "#dd8452",
+    "US": "#c44e52",
+    "CA": "#8b008b",
 }
 
 
@@ -129,7 +133,6 @@ class QuinexVisualisation:
         top_n: int = 10,
         ignore_empty: bool = True,
         figsize: tuple = (6, 6),
-        title: str = None
     ):
         """
         Create a bar plot of the top N most frequent values.
@@ -540,6 +543,11 @@ class QuinexVisualisation:
               points a country must have to appear in the bubble chart (default: 1).
             - 'show_regression' (bool): For plot_mode='size'. Whether to draw an OLS
               regression line through all plotted countries (default: False).
+            - 'show_rivers' (bool): Whether to draw rivers on the map (default: False).
+            - 'show_roads' (bool or str): Whether to draw roads on the map (default: False).
+              Uses Natural Earth 10m roads data. Accepted values:
+              ``True`` / ``'all'`` – all roads; ``'highway'`` – Major Highways only;
+              ``'secondary'`` – Major + Secondary Highways.
         
         Args:
             datasets: List of dicts with 'df', 'value_column', 'entity_column',
@@ -647,12 +655,16 @@ class QuinexVisualisation:
                     aggregation=aggregation,
                     spatial_extent=dataset_extent,
                     min_datapoints=data.get('min_datapoints', 1),
+                    show_rivers=data.get('show_rivers', False),
+                    show_roads=data.get('show_roads', False),
                 )
             else:  # points mode
                 self._plot_world_subplot(
                     axes[i], data, entity_marker_map, scalar_map,
                     default_color, default_point_size, dataset_continent,
                     spatial_extent=dataset_extent,
+                    show_rivers=data.get('show_rivers', False),
+                    show_roads=data.get('show_roads', False),
                 )
 
         # Add colorbar (only for map subplots)
@@ -761,6 +773,8 @@ class QuinexVisualisation:
         default_point_size: int,
         continent: str,
         spatial_extent: list = None,
+        show_rivers: bool = False,
+        show_roads: bool = False,
     ):
         """Plot a single world map subplot."""
         df = data['df']
@@ -774,6 +788,10 @@ class QuinexVisualisation:
         ax.add_feature(cfeature.BORDERS, edgecolor='black')
         ax.add_feature(cfeature.LAND, facecolor='white')
         ax.add_feature(cfeature.OCEAN, facecolor='white')
+        if show_rivers:
+            ax.add_feature(cfeature.RIVERS, edgecolor='steelblue', linewidth=0.5)
+        if show_roads:
+            self._add_roads_to_ax(ax, show_roads)
 
         # Set extent (spatial_extent takes precedence over continent)
         # For global/world views, set_global() is sufficient — calling set_extent
@@ -816,12 +834,16 @@ class QuinexVisualisation:
         aggregation: str = "mean",
         spatial_extent: list = None,
         min_datapoints: int = 1,
+        show_rivers: bool = False,
+        show_roads: bool = False,
     ):
         """Plot a single world map subplot as a choropleth (countries filled by value).
         
         Args:
             min_datapoints: Minimum number of data points a country must have
                 to be colored. Countries below this threshold are shown in grey.
+            show_rivers: Whether to draw rivers on the map.
+            show_roads: Whether to draw major roads on the map.
         """
         df = data['df']
         value_col = data.get('value_column')
@@ -832,6 +854,10 @@ class QuinexVisualisation:
         ax.coastlines()
         ax.add_feature(cfeature.BORDERS, edgecolor='black', linewidth=0.5)
         ax.add_feature(cfeature.OCEAN, facecolor='white')
+        if show_rivers:
+            ax.add_feature(cfeature.RIVERS, edgecolor='steelblue', linewidth=0.5)
+        if show_roads:
+            self._add_roads_to_ax(ax, show_roads)
 
         # Set extent (spatial_extent takes precedence over continent)
         # For global/world views, set_global() is sufficient — calling set_extent
@@ -842,6 +868,7 @@ class QuinexVisualisation:
             ax.set_extent(CONTINENT_BOUNDS[continent], crs=ccrs.PlateCarree())
 
         # Aggregate values per country (normalized)
+        low_count_set: set = set()
         if value_col and country_column in df.columns:
             # Normalize country codes first
             df_normalized = df.copy()
@@ -849,13 +876,20 @@ class QuinexVisualisation:
             
             df_clean = df_normalized.dropna(subset=['country_norm', value_col])
             
-            # Filter countries with fewer data points than min_datapoints
             country_counts = df_clean.groupby('country_norm')[value_col].count()
             valid_countries = country_counts[country_counts >= min_datapoints].index
-            df_clean = df_clean[df_clean['country_norm'].isin(valid_countries)]
-            
+
+            # Track countries with data but below the threshold for hatching
+            if min_datapoints > 1:
+                low_count_set = set(
+                    country_counts[(country_counts > 0) & (country_counts < min_datapoints)].index
+                )
+
+            # Include all countries with at least one data point so low-count
+            # countries still receive their computed colour (shown with hatching).
+            all_with_data = country_counts[country_counts > 0].index
             country_agg = (
-                df_clean
+                df_clean[df_clean['country_norm'].isin(all_with_data)]
                 .groupby('country_norm')[value_col]
                 .agg(aggregation)
                 .to_dict()
@@ -903,7 +937,57 @@ class QuinexVisualisation:
                 linewidth=0.5,
             )
 
+            # Overlay hatching for countries below the min_datapoints threshold
+            if low_count_set:
+                is_low_count = (
+                    country_iso3 in low_count_set
+                    or country_iso2 in low_count_set
+                    or country_name in low_count_set
+                    or (country_name and normalize_country_code(country_name) in low_count_set)
+                )
+                if is_low_count:
+                    ax.add_geometries(
+                        [geometry], ccrs.PlateCarree(),
+                        facecolor='none',
+                        edgecolor='white',
+                        linewidth=0.5,
+                        hatch='////',
+                    )
+
         ax.set_title(title, loc='left', fontweight='bold', pad=10)
+
+    def _add_roads_to_ax(self, ax, road_type):
+        """Add road geometries to a cartopy axes, filtered by road type.
+
+        Args:
+            ax: Cartopy GeoAxes to draw on.
+            road_type: One of:
+                - True / 'all'          — all roads in the dataset
+                - 'highway'             — Major Highways only
+                - 'secondary'           — Major + Secondary Highways
+        """
+        ROAD_TYPE_FILTER = {
+            True:        None,          # no filter → all roads
+            'all':       None,
+            'highway':   {'Major Highway'},
+            'secondary': {'Major Highway', 'Secondary Highway'},
+        }
+        allowed = ROAD_TYPE_FILTER.get(road_type)
+
+        shpfilename = shpreader.natural_earth(
+            resolution='10m', category='cultural', name='roads'
+        )
+        reader = shpreader.Reader(shpfilename)
+        geometries = [
+            record.geometry
+            for record in reader.records()
+            if allowed is None or record.attributes.get('type') in allowed
+        ]
+        if geometries:
+            ax.add_geometries(
+                geometries, ccrs.PlateCarree(),
+                facecolor='none', edgecolor='#c0392b', linewidth=0.5,
+            )
 
     def _add_world_colorbar(
         self,

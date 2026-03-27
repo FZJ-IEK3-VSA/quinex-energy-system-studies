@@ -27,11 +27,11 @@ def _worker_loop(in_q, out_q):
             value, unit = instance.extract_value_and_unit(parsed)
             if value is not None:
                 value = float(value)
-            out_q.put((value, unit))
+            out_q.put((value, unit, parsed))
         except (OverflowError, ValueError, TypeError):
-            out_q.put((None, None))
+            out_q.put((None, None, None))
         except Exception:
-            out_q.put((None, None))
+            out_q.put((None, None, None))
 
 
 
@@ -78,6 +78,7 @@ class QuinexPostprocessing():
             self.text = result["text"]
             
             self.year = year_lookup.get(self.doi)
+            self.source_url = result.get("metadata", {}).get("provenance", {}).get("fulltext_source", {}).get("url", pd.NA)
        
             statements = result.get("annotations", {}).get("quantitative_statements", [])
 
@@ -192,6 +193,7 @@ class QuinexPostprocessing():
             "temporal_scope": temporal,
             "spatial_scope": spatial,
             "references": references,
+            "source_url": self.source_url,
         })
         return records
     
@@ -483,7 +485,7 @@ class QuinexPostprocessing():
 
         for text in tqdm(texts, desc=desc):
             if not isinstance(text, str) or not text.strip():
-                results.append((None, None))
+                results.append((None, None, None))
                 continue
 
             in_q.put(text)
@@ -495,7 +497,7 @@ class QuinexPostprocessing():
                 worker.terminate()
                 worker.join()
                 worker, in_q, out_q = start_worker()
-                results.append((None, None))
+                results.append((None, None, None))
 
         in_q.put(None)  # sentinel to stop worker cleanly
         worker.join(timeout=5)

@@ -150,8 +150,6 @@ def flatten_regex_filters(mapping_dict):
     return flat
 
 
-
-
 def apply_master_mapping(df, mapping_dict):
     """
     df: DataFrame mit 'Entity' und 'Property'
@@ -203,5 +201,65 @@ def unit_string_to_dimension(unit_str):
         return None
 
     return None
+
+
+def get_columns():
+    """Gibt die Spaltennamen der data-Tabelle zurück."""
+    result = con.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'data'").fetchall()
+    return [row[0] for row in result]
+
+
+def get_value_counts(column, regex_filters=None, top_n=20):
+    """
+    Zählt die häufigsten Werte einer Spalte.
+    Bei LIST-Spalten wird UNNEST verwendet.
+    """
+    where_clause = build_where_clause(regex_filters)
+
+    # Spaltentyp prüfen
+    col_type = con.execute(
+        "SELECT data_type FROM information_schema.columns WHERE table_name = 'data' AND column_name = ?",
+        (column,)
+    ).fetchone()
+
+    not_null_connector = "AND" if where_clause else "WHERE"
+
+    if col_type and col_type[0].upper().startswith("VARCHAR[]"):
+        # VARCHAR-LIST-Spalte → UNNEST
+        query = f"""
+            SELECT unnested_val AS value, COUNT(*) AS count
+            FROM (
+                SELECT UNNEST("{column}") AS unnested_val
+                FROM data
+                {where_clause}
+            )
+            WHERE unnested_val IS NOT NULL AND unnested_val != ''
+            GROUP BY value
+            ORDER BY count DESC
+            LIMIT {int(top_n)}
+        """
+    elif col_type and "[]" in col_type[0]:
+        # Nicht-VARCHAR-LIST (z.B. STRUCT[]) → ganzen Eintrag als VARCHAR casten, kein UNNEST
+        query = f"""
+            SELECT CAST("{column}" AS VARCHAR) AS value, COUNT(*) AS count
+            FROM data
+            {where_clause}
+            {not_null_connector} "{column}" IS NOT NULL
+            GROUP BY value
+            ORDER BY count DESC
+            LIMIT {int(top_n)}
+        """
+    else:
+        query = f"""
+            SELECT CAST("{column}" AS VARCHAR) AS value, COUNT(*) AS count
+            FROM data
+            {where_clause}
+            {not_null_connector} "{column}" IS NOT NULL AND CAST("{column}" AS VARCHAR) != ''
+            GROUP BY value
+            ORDER BY count DESC
+            LIMIT {int(top_n)}
+        """
+
+    return con.execute(query).df()
 
 

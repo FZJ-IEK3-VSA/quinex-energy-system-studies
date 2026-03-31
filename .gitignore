@@ -6,3 +6,6 @@ notebooks/test.ipynb
 streamlit/components/__pycache__/*
 streamlit/utils/__pycache__/*
 notebooks/cached_predicted_geo_coordinates.json
+quinex_application/postprocessing/__pycache__/*
+quinex_application/visualisation/__pycache__/*
+quinex_application/quinex_processing/__pycache__/*

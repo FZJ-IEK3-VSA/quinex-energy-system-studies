@@ -208,6 +208,7 @@ class QuinexVisualisation:
                        - 'y_range' (tuple of min, max value) to set the y-axis range
                        - 'min_datapoints_per_year' (int) to override global min for this entry
                        - 'min_papers_per_year' (int) to override global min for this entry
+                       - 'number_xticks' (int) to override global x-tick interval for this entry
             legend_title: Title for the color legend.
             color_dict: Optional color mapping for entities.
             figsize: Figure size.
@@ -241,8 +242,14 @@ class QuinexVisualisation:
 
         # Prepare data and get global parameters
         prepared_data = self._prepare_temporal_data(
-            data_list, iqr_filter, temporal_col, publicationyear_col,
-            min_papers_per_year, min_datapoints_per_year, central_tendency, error_type
+            data_list, 
+            iqr_filter, 
+            temporal_col, 
+            publicationyear_col, 
+            min_papers_per_year, 
+            min_datapoints_per_year, 
+            central_tendency, 
+            error_type
         )
 
         all_entities, all_n_vals, color_dict = self._get_global_plot_params(
@@ -258,6 +265,7 @@ class QuinexVisualisation:
             entity_col = data['entity_col']
             ylabel = data['ylabel']
             title = data.get('title', '')
+            xticks = data.get('number_xticks', number_xticks)
 
             additional_data = data.get('additional_data', None)
             year_range = data.get('year_range', None)
@@ -266,7 +274,7 @@ class QuinexVisualisation:
             self._plot_temporal_subplot(
                 ax, agg_df, entity_col, color_dict,
                 min_n, max_n, point_size_range,
-                error_type, error_display, ylabel, title, number_xticks,
+                error_type, error_display, ylabel, title, xticks,
                 additional_data=additional_data, year_range=year_range, y_range=y_range
             )
             
@@ -730,6 +738,7 @@ class QuinexVisualisation:
                         df.assign(dummy="x"), val_col, "dummy"
                     ).drop(columns="dummy")
 
+            df = df.dropna(subset=[val_col])
             data['df'] = df
 
             plot_mode = data.get('plot_mode', 'points')

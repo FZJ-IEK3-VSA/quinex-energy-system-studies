@@ -4,7 +4,7 @@
 import os
 import streamlit as st
 from utils import duckdb_filter, style, unit_filter
-from components import header, dataframe_view, pagination_download, filters, visualisation
+from components import header, dataframe_view, pagination_download, filters, visualisation, column_analysis
 
 
 # --- Setup ---
@@ -22,6 +22,7 @@ st.set_page_config(
 style.add_textinput_style()
 style.set_vertical_alignment()
 style.set_warning_color()
+style.add_form_input_border()
 
 # --- Header ---
 header.render(LOGO_FILE)
@@ -52,7 +53,7 @@ df_page = duckdb_filter.apply_master_mapping(df_page, regex_mapping)
 df_page = unit_filter.apply_unit_filters(df_page, regex_mapping)
 
 # --- Tabs für Data / Plots ---
-tab_data, tab_temporal, tab_spatial = st.tabs(["Data", "Temporal Plot", "Spatial Plot"])
+tab_data, tab_freq, tab_temporal, tab_spatial = st.tabs(["Data", "Column Frequency", "Temporal Plot", "Spatial Plot"])
 
 with tab_data:
     # --- DataFrame Anzeige ---
@@ -60,6 +61,10 @@ with tab_data:
 
     # --- Pagination + Download ---
     pagination_download.render(total_rows, ROWS_PER_PAGE, regex_filters, regex_mapping)
+
+with tab_freq:
+    # --- Column Frequency Analysis ---
+    column_analysis.render(regex_filters, regex_mapping)
 
 with tab_temporal:
     # --- Visualisation ---

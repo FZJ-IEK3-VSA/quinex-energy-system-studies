@@ -81,6 +81,50 @@ def format_unit_list(u):
     return " * ".join(parts)
 
 
+def format_list_column(val):
+    if isinstance(val, (list, tuple, np.ndarray)):
+        items = list(val) if isinstance(val, np.ndarray) else val
+        return str(items)
+    if isinstance(val, str):
+        return val
+    if val is None:
+        return ""
+    return str(val)
+
+
+def format_references_column(val):
+    if isinstance(val, str):
+        s = val.strip()
+        if s.startswith("["):
+            try:
+                val = ast.literal_eval(s)
+            except Exception:
+                return s
+        else:
+            return s
+
+    if isinstance(val, dict):
+        val = [val]
+
+    if isinstance(val, (list, tuple)):
+        parts = []
+        for item in val:
+            if isinstance(item, dict):
+                title = item.get("title", "")
+                venue = item.get("venue", "")
+                if venue:
+                    parts.append(f"{title} ({venue})")
+                else:
+                    parts.append(title)
+            else:
+                parts.append(str(item))
+        return "; ".join(parts)
+
+    if val is None:
+        return ""
+    return str(val)
+
+
 def format_units_for_display(df):
     df = df.copy()
     df["Unit Normalized"] = df["Unit Normalized"].apply(parse_unit_column)
@@ -91,17 +135,25 @@ def format_units_for_display(df):
 def render(df, rows_per_page):
     df = format_units_for_display(df)
 
+    if "Author Origin" in df.columns:
+        df["Author Origin"] = df["Author Origin"].apply(format_list_column)
+    if "References" in df.columns:
+        df["References"] = df["References"].apply(format_references_column)
+
     desired_columns = [
         "DOI",
         "Publication Year",
+        "Author Origin",
         "Entity",
         "Property",
-        "Quantity Text",
+        "Quantity",
         "Value Normalized",
         "Unit Normalized",
         "Quote",
         "Temporal Scope",
         "Spatial Scope",
+        "References",
+        "Classification",
         "Entity Mapping",
         "Property Mapping",
         "Unit Mapping",

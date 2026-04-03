@@ -556,6 +556,9 @@ class QuinexVisualisation:
               Uses Natural Earth 10m roads data. Accepted values:
               ``True`` / ``'all'`` – all roads; ``'highway'`` – Major Highways only;
               ``'secondary'`` – Major + Secondary Highways.
+            - 'show_cities' (bool or int): Whether to draw the largest cities on the map
+              (default: False). If ``True``, the 10 largest cities are shown. Pass an
+              ``int`` to control how many cities to display (e.g. ``5`` for top 5).
         
         Args:
             datasets: List of dicts with 'df', 'value_column', 'entity_column',
@@ -665,6 +668,7 @@ class QuinexVisualisation:
                     min_datapoints=data.get('min_datapoints', 1),
                     show_rivers=data.get('show_rivers', False),
                     show_roads=data.get('show_roads', False),
+                    show_cities=data.get('show_cities', False),
                 )
             else:  # points mode
                 self._plot_world_subplot(
@@ -673,6 +677,7 @@ class QuinexVisualisation:
                     spatial_extent=dataset_extent,
                     show_rivers=data.get('show_rivers', False),
                     show_roads=data.get('show_roads', False),
+                    show_cities=data.get('show_cities', False),
                 )
 
         # Add colorbar (only for map subplots)
@@ -784,6 +789,7 @@ class QuinexVisualisation:
         spatial_extent: list = None,
         show_rivers: bool = False,
         show_roads: bool = False,
+        show_cities=False,
     ):
         """Plot a single world map subplot."""
         df = data['df']
@@ -809,6 +815,9 @@ class QuinexVisualisation:
             ax.set_extent(spatial_extent, crs=ccrs.PlateCarree())
         elif continent and continent != 'World':
             ax.set_extent(CONTINENT_BOUNDS[continent], crs=ccrs.PlateCarree())
+
+        if show_cities:
+            self._add_cities_to_ax(ax, show_cities)
 
         # Plot points
         for _, row in df.iterrows():
@@ -845,6 +854,7 @@ class QuinexVisualisation:
         min_datapoints: int = 1,
         show_rivers: bool = False,
         show_roads: bool = False,
+        show_cities=False,
     ):
         """Plot a single world map subplot as a choropleth (countries filled by value).
         
@@ -853,6 +863,7 @@ class QuinexVisualisation:
                 to be colored. Countries below this threshold are shown in grey.
             show_rivers: Whether to draw rivers on the map.
             show_roads: Whether to draw major roads on the map.
+            show_cities: Whether to draw the largest cities on the map.
         """
         df = data['df']
         value_col = data.get('value_column')
@@ -875,6 +886,9 @@ class QuinexVisualisation:
             ax.set_extent(spatial_extent, crs=ccrs.PlateCarree())
         elif continent and continent != 'World':
             ax.set_extent(CONTINENT_BOUNDS[continent], crs=ccrs.PlateCarree())
+
+        if show_cities:
+            self._add_cities_to_ax(ax, show_cities)
 
         # Aggregate values per country (normalized)
         low_count_set: set = set()
@@ -996,6 +1010,47 @@ class QuinexVisualisation:
             ax.add_geometries(
                 geometries, ccrs.PlateCarree(),
                 facecolor='none', edgecolor='#c0392b', linewidth=0.5,
+            )
+
+    def _add_cities_to_ax(self, ax, city_option):
+        """Add the largest cities to a cartopy axes.
+
+        Args:
+            ax: Cartopy GeoAxes to draw on.
+            city_option: One of:
+                - True   — show the 10 largest cities
+                - int    — show the N largest cities
+        """
+        n_cities = city_option if isinstance(city_option, int) else 10
+
+        shpfilename = shpreader.natural_earth(
+            resolution='10m', category='cultural', name='populated_places'
+        )
+        reader = shpreader.Reader(shpfilename)
+
+        cities = []
+        for record in reader.records():
+            pop = record.attributes.get('POP_MAX', 0) or 0
+            name = record.attributes.get('NAME', '')
+            lon = record.attributes.get('LONGITUDE', record.geometry.x)
+            lat = record.attributes.get('LATITUDE', record.geometry.y)
+            cities.append((name, pop, lon, lat))
+
+        cities.sort(key=lambda c: c[1], reverse=True)
+        top_cities = cities[:n_cities]
+
+        for name, _pop, lon, lat in top_cities:
+            ax.plot(
+                lon, lat,
+                marker='o', color='black', markersize=3,
+                transform=ccrs.PlateCarree(),
+                zorder=5,
+            )
+            ax.text(
+                lon + 0.5, lat + 0.5, name,
+                fontsize=6, fontweight='bold',
+                transform=ccrs.PlateCarree(),
+                zorder=5,
             )
 
     def _add_world_colorbar(

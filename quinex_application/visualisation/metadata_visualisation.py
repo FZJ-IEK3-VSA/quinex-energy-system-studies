@@ -1160,9 +1160,15 @@ class VisualisationMetadata:
 
             df['Year'] = int(year_match.group(1))
             df['Title'] = df['Title'].str.upper().str.strip()
+            df['SJR'] = df['SJR'].astype(str).str.replace(',', '.').str.strip()
+            df['SJR'] = pd.to_numeric(df['SJR'], errors='coerce')
             sjr_list.append(df[['Title', 'Year', 'SJR']])
 
-        return pd.concat(sjr_list, ignore_index=True)
+        sjr_all = pd.concat(sjr_list, ignore_index=True)
+        sjr_all = sjr_all.sort_values('SJR', ascending=False).drop_duplicates(
+            subset=['Title', 'Year'], keep='first'
+        )
+        return sjr_all
 
     def _prepare_metadata_for_sjr(
         self,

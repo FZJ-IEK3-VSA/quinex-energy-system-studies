@@ -75,7 +75,7 @@ class QuinexPostprocessing():
                 print(f"⚠️  No analysis result for DOI: {self.doi}")
                 continue
 
-            self.text = result["text"]
+            self.text = result.get("text")
             
             self.year = year_lookup.get(self.doi)
             self.source_url = result.get("metadata", {}).get("provenance", {}).get("fulltext_source", {}).get("url", pd.NA)
@@ -198,6 +198,9 @@ class QuinexPostprocessing():
         return records
     
     def get_quote(self):
+        if not self.text:
+            return pd.NA
+
         entity = self.stm.get("claim", {}).get("entity", {})
         prop = self.stm.get("claim", {}).get("property", {})
         quantity = self.stm.get("claim", {}).get("quantity", {})

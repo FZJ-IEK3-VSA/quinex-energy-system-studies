@@ -6,6 +6,7 @@ from research papers, including country distributions, journal metrics,
 and temporal trends.
 """
 
+import ast
 import glob
 import os
 import re
@@ -320,10 +321,56 @@ class VisualisationMetadata:
             return df[df['publication_year'] <= max_year].copy()
         return df
 
+    def _to_country_list(self, value) -> list:
+        """Convert country field to a list of ISO2 country codes."""
+        if isinstance(value, list):
+            return [str(v).strip() for v in value if pd.notna(v) and str(v).strip()]
+
+        if isinstance(value, tuple):
+            return [str(v).strip() for v in value if pd.notna(v) and str(v).strip()]
+
+        # numpy arrays/pandas arrays should be treated like sequences, not scalars.
+        if hasattr(value, "tolist") and not isinstance(value, str):
+            seq = value.tolist()
+            if isinstance(seq, list):
+                return [str(v).strip() for v in seq if pd.notna(v) and str(v).strip()]
+
+        try:
+            if pd.isna(value):
+                return []
+        except (TypeError, ValueError):
+            # Some array-like objects return boolean arrays for isna().
+            pass
+
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return []
+
+            if text.startswith("[") and text.endswith("]"):
+                try:
+                    parsed = ast.literal_eval(text)
+                    if isinstance(parsed, (list, tuple)):
+                        return [
+                            str(v).strip()
+                            for v in parsed
+                            if pd.notna(v) and str(v).strip()
+                        ]
+                except (ValueError, SyntaxError):
+                    pass
+
+            if "," in text:
+                return [part.strip() for part in text.split(",") if part.strip()]
+
+            return [text]
+
+        return [str(value).strip()] if str(value).strip() else []
+
     def _print_missing_info(self, df: pd.DataFrame):
         """Print information about missing data."""
         total_papers = df['DOI'].nunique()
-        missing_papers = df[df['countries'].str.len() == 0]['DOI'].nunique()
+        country_lists = df['countries'].apply(self._to_country_list)
+        missing_papers = df[country_lists.apply(len) == 0]['DOI'].nunique()
         missing_sjr = df['SJR'].isna().sum()
         
         print(f"Missing country info: {missing_papers} papers ({missing_papers/total_papers*100:.2f}%)")
@@ -331,11 +378,14 @@ class VisualisationMetadata:
 
     def _clean_country_data(self, df: pd.DataFrame) -> pd.DataFrame:
         """Clean and explode country data."""
-        df_clean = df[df['countries'].str.len() > 0].explode('countries')
-        df_clean['SJR'] = pd.to_numeric(
-            df_clean['SJR'].str.replace(',', '.'), 
-            errors='coerce'
+        df_clean = df.copy()
+        df_clean['countries'] = df_clean['countries'].apply(self._to_country_list)
+        df_clean = df_clean[df_clean['countries'].apply(len) > 0].explode('countries')
+
+        sjr_series = df_clean['SJR'].apply(
+            lambda x: x.replace(',', '.') if isinstance(x, str) else x
         )
+        df_clean['SJR'] = pd.to_numeric(sjr_series, errors='coerce')
         return df_clean
 
     def _calculate_country_shares_by_year(self, df: pd.DataFrame) -> pd.DataFrame:

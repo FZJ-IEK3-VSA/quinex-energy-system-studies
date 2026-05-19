@@ -1,7 +1,16 @@
-import re
 import streamlit as st
 import plotly.express as px
 from utils import duckdb_filter
+
+ALLOWED_COLUMNS = [
+    "DOI",
+    "Publication Year",
+    "Entity",
+    "Property",
+    "Temporal Scope",
+    "Spatial Scope",
+    "Unit Normalized",
+]
 
 
 def _get_mapping_options(regex_mapping, col):
@@ -64,8 +73,7 @@ def render(regex_filters, regex_mapping=None):
         property_variants = _get_variants_for_masters(regex_mapping, "Property", selected_properties)
         active_filters["Property"] = property_variants
 
-    allowed = ["DOI", "Publication Year", "Entity", "Property", "Temporal Scope", "Spatial Scope", "Unit Normalized"]
-    columns = [c for c in duckdb_filter.get_columns() if c in allowed]
+    columns = [c for c in duckdb_filter.get_columns() if c in ALLOWED_COLUMNS]
 
     col1, col2 = st.columns([2, 1])
     with col1:

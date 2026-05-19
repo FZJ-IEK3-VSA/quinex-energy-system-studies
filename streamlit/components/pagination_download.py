@@ -5,6 +5,10 @@ from utils import duckdb_filter
 
 MAX_DOWNLOAD_ROWS = 100_000
 
+
+def _get_total_pages(total_rows, rows_per_page):
+    return max(1, math.ceil(total_rows / rows_per_page))
+
 def prepare_csv(regex_filters, regex_mapping, total_rows):
     df_all = duckdb_filter.get_page(regex_filters, limit=total_rows, offset=0)
     df_all = duckdb_filter.apply_master_mapping(df_all, regex_mapping)
@@ -16,7 +20,7 @@ def pagination_ui(total_rows, rows_per_page):
     if 'page' not in st.session_state:
         st.session_state.page = 1
 
-    total_pages = max(1, math.ceil(total_rows / rows_per_page))
+    total_pages = _get_total_pages(total_rows, rows_per_page)
 
     col1, col2 = st.columns(2, width=200)
 
@@ -42,7 +46,7 @@ def render(total_rows, rows_per_page, regex_filters, regex_mapping):
         with col_info:
             st.markdown(
                 f"**Matches:** {total_rows:,}  |  "
-                f"**Page:** {st.session_state.page} / {max(1, (total_rows-1)//rows_per_page + 1)}"
+                f"**Page:** {st.session_state.page} / {_get_total_pages(total_rows, rows_per_page)}"
             )
 
         # Pagination

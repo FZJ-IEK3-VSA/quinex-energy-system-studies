@@ -146,7 +146,7 @@ def render_temporal(total_rows, regex_filters, regex_mapping):
         font_size, ps_min, ps_max = _auto_temporal_style(n)
 
         # --- Plot erzeugen ---
-        fig, data_tables = vis.plot_multiple_properties_over_time(
+        fig, _ = vis.plot_multiple_properties_over_time(
             data_list=data_over_time,
             legend_title='Technology Type',
             figsize=figsize,
@@ -309,7 +309,7 @@ def render_spatial(total_rows, regex_filters, regex_mapping):
     # Always render from session_state if available
     if 'spatial_plots' in st.session_state and st.session_state['spatial_plots']:
         spatial_plots = st.session_state['spatial_plots']
-        with st.expander(f"🗺️ Plot", expanded=True):
+        with st.expander("🗺️ Plot", expanded=True):
             tab_labels = [p[0] for p in spatial_plots]
             tabs = st.tabs(tab_labels)
             for tab, (label, svg_data, pdf_data) in zip(tabs, spatial_plots):

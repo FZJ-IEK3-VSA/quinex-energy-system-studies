@@ -32,7 +32,7 @@ def parse_unit_column(u):
     if isinstance(u, np.ndarray):
         try:
             return u.tolist()
-        except:
+        except Exception:
             return None
 
     # Already dict → in Liste packen
@@ -43,7 +43,7 @@ def parse_unit_column(u):
     if hasattr(u, "to_list"):
         try:
             return u.to_list()
-        except:
+        except Exception:
             pass
 
     # String case
@@ -52,7 +52,7 @@ def parse_unit_column(u):
         if s.startswith("[") and s.endswith("]"):
             try:
                 return ast.literal_eval(s)
-            except:
+            except Exception:
                 return None
 
     return None

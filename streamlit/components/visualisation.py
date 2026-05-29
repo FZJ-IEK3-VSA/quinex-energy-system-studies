@@ -12,18 +12,49 @@ sys.path.append(os.path.abspath(os.path.join(BASE_DIR, "..", "..")))
 
 from quinex_application.visualisation.quinex_visualisation import QuinexVisualisation  # Klasse mit den Plot-Funktionen
 
-if 'vis' not in st.session_state:
-    st.session_state.vis = QuinexVisualisation()
-
-vis = st.session_state.vis
+def _get_vis():
+    if "vis" not in st.session_state:
+        st.session_state.vis = QuinexVisualisation()
+    return st.session_state.vis
 
 CONTINENT_OPTIONS = ["World", "Europe", "Asia", "North America", "South America", "Africa", "Oceania"]
 
+UNITLESS_ALIASES = {
+    "-",
+    "[-]",
+    "unitless",
+    "dimensionless",
+    "no unit",
+    "none",
+    "kein unit",
+    "ohne unit",
+}
 
-def prepare_df(regex_filters, regex_mapping, total_rows):
-    df_all = duckdb_filter.get_page(regex_filters, limit=total_rows, offset=0)
+
+def _display_unit_label(raw_unit):
+    unit = str(raw_unit).strip() if raw_unit is not None else ""
+    if not unit:
+        return ""
+    if unit.lower() in UNITLESS_ALIASES:
+        return "-"
+    return unit
+
+
+def _format_property_label(prop_name, raw_unit):
+    unit = _display_unit_label(raw_unit)
+    if unit:
+        return f"{prop_name} [{unit}]"
+    return str(prop_name)
+
+
+def prepare_df(regex_filters, regex_mapping):
+    total_base_rows = duckdb_filter.get_total_rows(regex_filters)
+    df_all = duckdb_filter.get_page(regex_filters, limit=total_base_rows, offset=0)
     df_all = duckdb_filter.apply_master_mapping(df_all, regex_mapping)
     df_all = unit_filter.apply_unit_filters(df_all, regex_mapping)
+    df_all = duckdb_filter.add_effective_value_column(df_all)
+    value_min, value_max = duckdb_filter.get_value_range_from_filters(regex_filters)
+    df_all = duckdb_filter.apply_value_range_filter(df_all, min_value=value_min, max_value=value_max)
     return df_all
 
 
@@ -53,7 +84,8 @@ def _auto_temporal_style(n_plots):
     return 9, 20, 80
 
 
-def render_temporal(total_rows, regex_filters, regex_mapping):
+def render_temporal(regex_filters, regex_mapping):
+    vis = _get_vis()
     with st.expander("⚙️ Settings"):
         with st.form("temporal_plot_form", border=False):
             st.markdown("##### Subplot Settings")
@@ -62,15 +94,15 @@ def render_temporal(total_rows, regex_filters, regex_mapping):
             subplot_labels = []
             for i, row in enumerate(regex_mapping["Property"]):
                 prop_name = row[0]
-                unit = regex_mapping["Unit"][i][0] if "Unit" in regex_mapping else ""
+                unit_raw = regex_mapping["Unit"][i][0] if "Unit" in regex_mapping else ""
                 alphabet_labels = list(string.ascii_lowercase)
                 label_prefix = alphabet_labels[i] if i < len(alphabet_labels) else str(i + 1)
-                subplot_labels.append((label_prefix, prop_name, unit))
+                subplot_labels.append((label_prefix, _format_property_label(prop_name, unit_raw)))
 
             range_inputs = {}
             per_subplot_settings = {}
-            for i, (label_prefix, prop_name, unit) in enumerate(subplot_labels):
-                st.markdown(f"**{label_prefix})** {prop_name} [{unit}]")
+            for i, (label_prefix, prop_label) in enumerate(subplot_labels):
+                st.markdown(f"**{label_prefix})** {prop_label}")
                 r1, r2, r3, r4 = st.columns(4)
                 with r1:
                     y_min_str = st.text_input("Y min", value="", key=f"temp_ymin_{i}", placeholder="auto")
@@ -94,25 +126,26 @@ def render_temporal(total_rows, regex_filters, regex_mapping):
             submitted = st.form_submit_button("Generate Plot", type="primary")
 
     if submitted:
-        df = prepare_df(regex_filters, regex_mapping, total_rows)
+        df = prepare_df(regex_filters, regex_mapping)
 
         # --- Automatische Erstellung von data_over_time ---
         alphabet_labels = list(string.ascii_lowercase)
         data_over_time = []
         for i, row in enumerate(regex_mapping["Property"]):
             prop_name = row[0]
-            unit = regex_mapping["Unit"][i][0] if "Unit" in regex_mapping else ""
+            unit_raw = regex_mapping["Unit"][i][0] if "Unit" in regex_mapping else ""
+            prop_label = _format_property_label(prop_name, unit_raw)
             df_prop = df[df["Property Mapping"] == prop_name]
             label_prefix = f"{alphabet_labels[i]}" if i < len(alphabet_labels) else f"{i+1}"
             if not df_prop.empty:
-                df_prop = df_prop[df_prop["Value Converted"].notna()]
+                df_prop = df_prop[df_prop[duckdb_filter.VALUE_EFFECTIVE_COLUMN].notna()]
                 if df_prop.empty:
                     continue
                 entry = {
                     'df': df_prop,
                     'entity_col': 'Entity Mapping',
-                    'value_col': 'Value Converted',
-                    'ylabel': f"{prop_name} [{unit}]",
+                    'value_col': duckdb_filter.VALUE_EFFECTIVE_COLUMN,
+                    'ylabel': prop_label,
                     'title': label_prefix
                 }
                 # Apply user-specified ranges
@@ -211,7 +244,8 @@ def _auto_spatial_style(n_plots):
     return 10.0, 30.0
 
 
-def render_spatial(total_rows, regex_filters, regex_mapping):
+def render_spatial(regex_filters, regex_mapping):
+    vis = _get_vis()
     with st.expander("⚙️ Settings"):
         with st.form("spatial_plot_form", border=False):
             st.markdown("##### Subplot Settings")
@@ -220,14 +254,14 @@ def render_spatial(total_rows, regex_filters, regex_mapping):
             subplot_labels = []
             for i, row in enumerate(regex_mapping["Property"]):
                 prop_name = row[0]
-                unit = regex_mapping["Unit"][i][0] if "Unit" in regex_mapping else ""
+                unit_raw = regex_mapping["Unit"][i][0] if "Unit" in regex_mapping else ""
                 alphabet_labels = list(string.ascii_lowercase)
                 label_prefix = alphabet_labels[i] if i < len(alphabet_labels) else str(i + 1)
-                subplot_labels.append((label_prefix, prop_name, unit))
+                subplot_labels.append((label_prefix, _format_property_label(prop_name, unit_raw)))
 
             spatial_subplot_settings = {}
-            for i, (label_prefix, prop_name, unit) in enumerate(subplot_labels):
-                st.markdown(f"**{label_prefix})** {prop_name} [{unit}]")
+            for i, (label_prefix, prop_label) in enumerate(subplot_labels):
+                st.markdown(f"**{label_prefix})** {prop_label}")
                 c1, c2 = st.columns(2)
                 with c1:
                     plot_mode = st.selectbox(
@@ -245,8 +279,17 @@ def render_spatial(total_rows, regex_filters, regex_mapping):
             submitted = st.form_submit_button("Generate Spatial Plot", type="primary")
 
     if submitted:
+        missing_year_properties = unit_filter.get_spatial_currency_properties_without_year(regex_mapping)
+        if missing_year_properties:
+            joined_properties = ", ".join(missing_year_properties)
+            st.error(
+                "Spatial plot requires a valid Year for currency-based unit conversion "
+                f"in: {joined_properties}."
+            )
+            return
+
         # --- Daten vorbereiten ---
-        df_all = prepare_df(regex_filters, regex_mapping, total_rows)
+        df_all = prepare_df(regex_filters, regex_mapping)
         df_all = vis.convert_spatial(df_all, spatial_col="Spatial Scope")
 
         spatial_plots = []  # list of (label, svg_str, pdf_bytes)
@@ -254,7 +297,8 @@ def render_spatial(total_rows, regex_filters, regex_mapping):
         # --- Pro Property Mapping einen Plot erstellen ---
         for i, row in enumerate(regex_mapping["Property"]):
             prop_name = row[0]
-            unit = regex_mapping["Unit"][i][0] if "Unit" in regex_mapping else ""
+            unit_raw = regex_mapping["Unit"][i][0] if "Unit" in regex_mapping else ""
+            prop_label = _format_property_label(prop_name, unit_raw)
             df_prop = df_all[df_all["Property Mapping"] == prop_name]
             if df_prop.empty:
                 continue
@@ -270,12 +314,12 @@ def render_spatial(total_rows, regex_filters, regex_mapping):
                 label_prefix = f"{alphabet_labels[idx]}) " if idx < len(alphabet_labels) else f"{idx+1}) "
                 data_list.append({
                     "df": df_entity,
-                    "value_column": "Value Converted",
+                    "value_column": duckdb_filter.VALUE_EFFECTIVE_COLUMN,
                     "title": f"{label_prefix}{entity}",
                     "plot_mode": sp_plot_mode,
                 })
 
-            colorbar_title = f"{prop_name} [{unit}]"
+            colorbar_title = prop_label
 
             # Auto figsize & style
             n = len(data_list)

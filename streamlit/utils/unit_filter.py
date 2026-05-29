@@ -14,10 +14,107 @@ def open_utf8(file, mode='r', *args, **kwargs):
 
 builtins.open = open_utf8
 
-if 'unit_parser' not in st.session_state:
-    st.session_state.unit_parser = FastSymbolicUnitParser()
+def _get_unit_parser():
+    if "unit_parser" not in st.session_state:
+        st.session_state.unit_parser = FastSymbolicUnitParser()
+    return st.session_state.unit_parser
 
-unit_parser = st.session_state.unit_parser
+UNITLESS_ALIASES = {
+    "-",
+    "[-]",
+    "unitless",
+    "dimensionless",
+    "no unit",
+    "none",
+    "kein unit",
+    "ohne unit",
+}
+
+CURRENCY_SYMBOL_HINTS = {"$", "€", "£", "¥"}
+
+
+def _is_unitless_alias(unit_str):
+    if not unit_str:
+        return False
+    return str(unit_str).strip().lower() in UNITLESS_ALIASES
+
+
+def _is_year_value_valid(year_str):
+    if year_str is None:
+        return False
+    try:
+        int(str(year_str).strip())
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _unit_requires_year(unit_str):
+    """Return True for units that include a currency component."""
+    if not unit_str:
+        return False
+
+    unit_text = str(unit_str).strip()
+    if not unit_text:
+        return False
+
+    if any(symbol in unit_text for symbol in CURRENCY_SYMBOL_HINTS):
+        return True
+
+    lowered = unit_text.lower()
+    if any(token in lowered for token in ("usd", "eur", "gbp", "jpy", "currency")):
+        return True
+
+    try:
+        unit_parser = _get_unit_parser()
+        parsed = unit_parser.parse(unit_text)
+    except (TypeError, ValueError, SyntaxError):
+        return False
+
+    for _, _, uri, _ in parsed:
+        if not uri:
+            continue
+        uri_str = str(uri)
+        if "CCY_" in uri_str or "/currency/" in uri_str:
+            return True
+    return False
+
+
+def get_spatial_currency_properties_without_year(regex_mapping: dict) -> list[str]:
+    """
+    Return property labels that need a year for currency conversion in spatial plots.
+    """
+    if not regex_mapping:
+        return []
+
+    properties = regex_mapping.get("Property", []) or []
+    units = regex_mapping.get("Unit", []) or []
+    years = regex_mapping.get("Year", []) or []
+
+    missing = []
+    for i, prop_row in enumerate(properties):
+        prop_label = ""
+        if isinstance(prop_row, (list, tuple)) and prop_row:
+            prop_label = str(prop_row[0]).strip()
+
+        unit_val = ""
+        if i < len(units) and isinstance(units[i], (list, tuple)) and units[i]:
+            unit_val = units[i][0]
+
+        if not unit_val or _is_unitless_alias(unit_val):
+            continue
+
+        if not _unit_requires_year(unit_val):
+            continue
+
+        year_val = ""
+        if i < len(years) and isinstance(years[i], (list, tuple)) and years[i]:
+            year_val = years[i][0]
+
+        if not _is_year_value_valid(year_val):
+            missing.append(prop_label or f"Property {i + 1}")
+
+    return missing
 
 def apply_unit_filters(df: pd.DataFrame, regex_mapping: dict) -> pd.DataFrame:
     """
@@ -41,11 +138,16 @@ def apply_unit_filters(df: pd.DataFrame, regex_mapping: dict) -> pd.DataFrame:
         return df
 
     prop_to_unit = {}
+    unitless_properties = set()
     prop_to_year = {}
     year_filters = regex_mapping.get("Year", [])
     for i, (prop_row, unit_row) in enumerate(zip(property_filters, unit_filters)):
         prop = prop_row[0].strip() if prop_row and prop_row[0] else None
         unit = unit_row[0].strip() if unit_row and unit_row[0] else None
+        if prop and _is_unitless_alias(unit):
+            unitless_properties.add(prop)
+            continue
+
         if prop and unit:
             prop_to_unit[prop] = unit
             # Jahr aus Year-Filter extrahieren
@@ -55,7 +157,7 @@ def apply_unit_filters(df: pd.DataFrame, regex_mapping: dict) -> pd.DataFrame:
                 except ValueError:
                     pass
 
-    if not prop_to_unit:
+    if not prop_to_unit and not unitless_properties:
         return df
 
     # Target Unit zuweisen (None für Zeilen ohne passendes Property Mapping)
@@ -70,6 +172,7 @@ def apply_unit_filters(df: pd.DataFrame, regex_mapping: dict) -> pd.DataFrame:
 
     # Target Units parsen
     parsed_target_units = {}
+    unit_parser = _get_unit_parser()
     for u in df.loc[convertible_mask, "Target Unit"].unique():
         try:
             parsed_target_units[u] = unit_parser.parse(u)
@@ -109,7 +212,9 @@ def apply_unit_filters(df: pd.DataFrame, regex_mapping: dict) -> pd.DataFrame:
             from_default_year = _extract_row_year(row)
       
             prop_mapping = row.get("Property Mapping")
-            to_default_year = prop_to_year.get(prop_mapping)
+            # If no explicit target year is set, align conversion with datapoint year
+            # (Temporal Scope year, fallback Publication Year).
+            to_default_year = prop_to_year.get(prop_mapping, from_default_year)
 
             val, conv_unit = unit_parser.unit_conversion(
                 value=row["Value Normalized"],
@@ -145,6 +250,18 @@ def apply_unit_filters(df: pd.DataFrame, regex_mapping: dict) -> pd.DataFrame:
 
         df.loc[convertible_mask, "Value Converted"] = converted_vals
         df.loc[convertible_mask, "Unit Mapping"] = converted_units
+
+    # Unitless-Properties: keine Konvertierung noetig, Value Normalized direkt verwenden.
+    if unitless_properties:
+        unitless_mask = (
+            df["Property Mapping"].isin(unitless_properties)
+            & df["Value Normalized"].notna()
+        )
+        if unitless_mask.any():
+            df.loc[unitless_mask, "Value Converted"] = pd.to_numeric(
+                df.loc[unitless_mask, "Value Normalized"], errors="coerce"
+            )
+            df.loc[unitless_mask, "Unit Mapping"] = "[-]"
 
     return df.reset_index(drop=True)
 

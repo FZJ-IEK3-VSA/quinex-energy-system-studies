@@ -18,6 +18,18 @@ def _parse_keywords(raw_keywords: str):
     return [k.strip() for k in normalized.split(",") if k.strip()]
 
 
+def _parse_float_optional(raw_value):
+    if raw_value is None:
+        return None
+    text = str(raw_value).strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except (TypeError, ValueError):
+        return None
+
+
 def _render_readme_section():
     """README-Hilfe in der Sidebar ohne Expander."""
     with st.sidebar:
@@ -132,7 +144,7 @@ def _render_mapping_filter(col_name):
                     new_variants = _parse_keywords(raw_keywords)
                     mapping_cards.render_keyword_chips(new_variants)
 
-                    if col_name == "Property" and new_master.strip() != "":
+                    if col_name == "Property":
                         _ensure_property_aux_row(row_idx)
 
                         unit_val = st.session_state.regex_groups["Unit"][row_idx][0]
@@ -144,9 +156,9 @@ def _render_mapping_filter(col_name):
                             if unit_key not in st.session_state:
                                 st.session_state[unit_key] = unit_val
                             new_unit = st.text_input(
-                                "Unit filter",
+                                "Unit filter (unitless = no unit)",
                                 key=unit_key,
-                                placeholder="e.g. $/kWh",
+                                placeholder="e.g. $/kWh or [-] (unitless)",
                                 icon=":material/straighten:",
                             )
                             st.session_state.regex_groups["Unit"][row_idx][0] = new_unit
@@ -158,7 +170,7 @@ def _render_mapping_filter(col_name):
                             new_year = st.text_input(
                                 "Year",
                                 key=year_key,
-                                placeholder="Mandatory for currencies",
+                                placeholder="Required for spatial currency plots",
                                 icon=":material/calendar_today:",
                             )
                             st.session_state.regex_groups["Year"][row_idx][0] = new_year
@@ -194,6 +206,8 @@ def _render_metadata_filters(facet_base_filters=None):
             "publication_year_range": None,
             "temporal_scope": [],
             "spatial_scope": [],
+            "value_min": None,
+            "value_max": None,
         }
     if "meta_publication_year_user_modified" not in st.session_state:
         st.session_state.meta_publication_year_user_modified = False
@@ -208,6 +222,8 @@ def _render_metadata_filters(facet_base_filters=None):
     current_temporal_scope = st.session_state.get("meta_temporal_scope", state.get("temporal_scope", []))
     current_spatial_scope = st.session_state.get("meta_spatial_scope", state.get("spatial_scope", []))
     current_year_range = st.session_state.get("meta_publication_year", state.get("publication_year_range"))
+    current_value_min = st.session_state.get("meta_value_min", state.get("value_min"))
+    current_value_max = st.session_state.get("meta_value_max", state.get("value_max"))
 
     def _faceted_filters(exclude_key=None):
         filters = dict(facet_base_filters or {})
@@ -303,11 +319,32 @@ def _render_metadata_filters(facet_base_filters=None):
         key="meta_spatial_scope",
     )
 
+    value_col_min, value_col_max = st.columns(2)
+    with value_col_min:
+        selected_value_min_raw = st.text_input(
+            "Min value",
+            value="" if current_value_min is None else str(current_value_min),
+            key="meta_value_min",
+            placeholder="e.g. 0",
+        )
+    with value_col_max:
+        selected_value_max_raw = st.text_input(
+            "Max value",
+            value="" if current_value_max is None else str(current_value_max),
+            key="meta_value_max",
+            placeholder="e.g. 1000",
+        )
+
+    selected_value_min = _parse_float_optional(selected_value_min_raw)
+    selected_value_max = _parse_float_optional(selected_value_max_raw)
+
     st.session_state.metadata_filters = {
         "author_origin": selected_author_origin,
         "publication_year_range": selected_year_range,
         "temporal_scope": selected_temporal_scope,
         "spatial_scope": selected_spatial_scope,
+        "value_min": selected_value_min,
+        "value_max": selected_value_max,
     }
 
     return {
@@ -315,6 +352,8 @@ def _render_metadata_filters(facet_base_filters=None):
         "__publication_year_range": selected_year_range,
         "__temporal_scope_values": selected_temporal_scope,
         "__spatial_scope_values": selected_spatial_scope,
+        "__value_min": selected_value_min,
+        "__value_max": selected_value_max,
     }
 
 

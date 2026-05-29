@@ -323,24 +323,14 @@ class VisualisationMetadata:
 
     def _to_country_list(self, value) -> list:
         """Convert country field to a list of ISO2 country codes."""
+        if pd.isna(value):
+            return []
+
         if isinstance(value, list):
             return [str(v).strip() for v in value if pd.notna(v) and str(v).strip()]
 
         if isinstance(value, tuple):
             return [str(v).strip() for v in value if pd.notna(v) and str(v).strip()]
-
-        # numpy arrays/pandas arrays should be treated like sequences, not scalars.
-        if hasattr(value, "tolist") and not isinstance(value, str):
-            seq = value.tolist()
-            if isinstance(seq, list):
-                return [str(v).strip() for v in seq if pd.notna(v) and str(v).strip()]
-
-        try:
-            if pd.isna(value):
-                return []
-        except (TypeError, ValueError):
-            # Some array-like objects return boolean arrays for isna().
-            pass
 
         if isinstance(value, str):
             text = value.strip()

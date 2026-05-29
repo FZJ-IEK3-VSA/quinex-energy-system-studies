@@ -3,10 +3,13 @@ import re
 import ast
 import json
 import builtins
+import threading
 import duckdb
 import pandas as pd
 import streamlit as st
 from quinex_utils.parsers.unit_parser import FastSymbolicUnitParser
+
+VALUE_EFFECTIVE_COLUMN = "Value Effective"
 
 # Monkeypatch open innerhalb quinex_utils, um UTF-8 zu erzwingen
 _open = builtins.open
@@ -17,10 +20,16 @@ def open_utf8(file, mode='r', *args, **kwargs):
 
 builtins.open = open_utf8
 
-if 'unit_parser' not in st.session_state:
-    st.session_state.unit_parser = FastSymbolicUnitParser()
-
-unit_parser = st.session_state.unit_parser
+UNITLESS_ALIASES = {
+    "-",
+    "[-]",
+    "unitless",
+    "dimensionless",
+    "no unit",
+    "none",
+    "kein unit",
+    "ohne unit",
+}
 
 # Basis-Pfad eine Ebene über streamlit/
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -33,18 +42,44 @@ os.makedirs(os.path.dirname(DB_FILE), exist_ok=True)
 # Prüfen, ob DB-Datei existiert
 db_exists = os.path.exists(DB_FILE)
 
-# DuckDB Verbindung
-con = duckdb.connect(DB_FILE)
+_db_init_lock = threading.Lock()
+_db_initialized = False
 
-# Tabelle nur einmal erstellen, falls DB neu ist
-if not db_exists:
-    print(f"DB-Datei existiert nicht. Erstelle DB und lade Parquet: {PARQUET_FILE}")
-    con.execute("""
-    CREATE TABLE data AS
-    SELECT * FROM parquet_scan(?)
-    """, (PARQUET_FILE,))
-else:
-    print(f"DB-Datei existiert. Verwende bestehende DB: {DB_FILE}")
+
+def _get_unit_parser():
+    if "unit_parser" not in st.session_state:
+        st.session_state.unit_parser = FastSymbolicUnitParser()
+    return st.session_state.unit_parser
+
+
+def _ensure_database_initialized():
+    global _db_initialized
+
+    if _db_initialized:
+        return
+
+    with _db_init_lock:
+        if _db_initialized:
+            return
+
+        with duckdb.connect(DB_FILE) as init_con:
+            table_exists = init_con.execute(
+                "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'data'"
+            ).fetchone()[0] > 0
+
+            if not table_exists:
+                print(f"DB-Datei existiert nicht. Erstelle DB und lade Parquet: {PARQUET_FILE}")
+                init_con.execute(
+                    """
+                    CREATE TABLE data AS
+                    SELECT * FROM parquet_scan(?)
+                    """,
+                    (PARQUET_FILE,),
+                )
+            elif db_exists:
+                print(f"DB-Datei existiert. Verwende bestehende DB: {DB_FILE}")
+
+        _db_initialized = True
 
 
 def _run_query(query, params=None, fetch="all", retries=1):
@@ -52,31 +87,27 @@ def _run_query(query, params=None, fetch="all", retries=1):
     Führt eine Query robust aus und versucht bei DuckDB-"cancelled"-Fehlern
     einmal mit neuer Verbindung erneut.
     """
-    global con
-
     params = params or ()
     attempts = retries + 1
+    _ensure_database_initialized()
 
     for attempt in range(attempts):
         try:
-            result = con.execute(query, params)
-            if fetch == "one":
-                return result.fetchone()
-            if fetch == "df":
-                return result.df()
-            return result.fetchall()
-        except duckdb.InvalidInputException as exc:
+            with duckdb.connect(DB_FILE, read_only=True) as con:
+                result = con.execute(query, params)
+                if fetch == "one":
+                    return result.fetchone()
+                if fetch == "df":
+                    return result.df()
+                return result.fetchall()
+        except duckdb.Error as exc:
             msg = str(exc).lower()
-            can_retry = "cancelled" in msg and attempt < attempts - 1
+            can_retry = (
+                ("cancelled" in msg or "transaction context" in msg)
+                and attempt < attempts - 1
+            )
             if not can_retry:
                 raise
-
-            try:
-                con.close()
-            except (RuntimeError, duckdb.Error):
-                pass
-
-            con = duckdb.connect(DB_FILE)
 
 
 def build_where_clause(regex_filters=None):
@@ -97,6 +128,7 @@ def build_where_clause(regex_filters=None):
     publication_year_range = regex_filters.get("__publication_year_range")
     temporal_scope_values = regex_filters.get("__temporal_scope_values", [])
     spatial_scope_values = regex_filters.get("__spatial_scope_values", [])
+    include_unitless = bool(regex_filters.get("__include_unitless", False))
 
     for col, patterns in regex_filters.items():
         if col.startswith("__"):
@@ -108,9 +140,17 @@ def build_where_clause(regex_filters=None):
         if col == "unit_dimension":
             # exakte Dimension — kein Regex
             dim_clauses = [f"unit_dimension = '{_sql_quote(d)}'" for d in patterns]
-            clauses.append("(" + " OR ".join(dim_clauses) + ")")
+            unit_clauses = list(dim_clauses)
+            if include_unitless:
+                unit_clauses.append(_build_unitless_dimension_clause())
+            clauses.append("(" + " OR ".join(unit_clauses) + ")")
         elif col in {"Entity", "Property"}:
-            exact_one_clause = _build_exactly_one_match_clause(col, patterns)
+            class_groups = regex_filters.get(f"__{col.lower()}_groups", [])
+            exact_one_clause = _build_exactly_one_class_match_clause(col, class_groups)
+
+            # Fallback für alte Filter-Strukturen ohne Klasseninfo
+            if not exact_one_clause:
+                exact_one_clause = _build_exactly_one_match_clause(col, patterns)
             if exact_one_clause:
                 clauses.append(exact_one_clause)
         else:
@@ -121,6 +161,9 @@ def build_where_clause(regex_filters=None):
                 transformed.append(f"(?i).*{safe_p}.*")
             combined = "|".join(transformed)
             clauses.append(f"{col} ~ '{_sql_quote(combined)}'")
+
+    if include_unitless and "unit_dimension" not in regex_filters:
+        clauses.append(_build_unitless_dimension_clause())
 
     if author_origin_values:
         author_clause = _build_contains_any_clause("Author Origin", author_origin_values)
@@ -219,24 +262,48 @@ def flatten_regex_filters(mapping_dict):
                     lst.append(val)
         flat[col] = lst
 
+        # Klassenweise Keywords fuer eindeutige Zuordnung speichern.
+        # Mehrere Keywords in derselben Klasse gelten als ein Klassen-Treffer.
+        class_groups = []
+        for row in groups:
+            if not isinstance(row, (list, tuple)) or not row:
+                continue
+
+            row_terms = _dedupe_values(row)
+            if row_terms:
+                class_groups.append(row_terms)
+
+        if class_groups:
+            flat[f"__{col.lower()}_groups"] = class_groups
+
     # --- Unit: Dimensionen erzeugen ---
     if "Unit" in mapping_dict:
         dim_list = []
+        has_unitless_filter = False
         for row in mapping_dict["Unit"]:
             unit_str = row[0]  # nur 1 Feld pro Zeile
+            if _is_unitless_alias(unit_str):
+                has_unitless_filter = True
+                continue
+
             dim = unit_string_to_dimension(unit_str)
             if dim:
                 dim_list.append(dim)
 
-        flat["unit_dimension"] = dim_list
+        if dim_list:
+            flat["unit_dimension"] = dim_list
+        if has_unitless_filter:
+            flat["__include_unitless"] = True
 
     for key in [
         "__author_origin_values",
         "__temporal_scope_values",
         "__spatial_scope_values",
+        "__value_min",
+        "__value_max",
     ]:
         vals = mapping_dict.get(key, [])
-        if vals:
+        if vals is not None and vals != []:
             flat[key] = vals
 
     year_range = mapping_dict.get("__publication_year_range")
@@ -244,6 +311,65 @@ def flatten_regex_filters(mapping_dict):
         flat["__publication_year_range"] = tuple(year_range)
 
     return flat
+
+
+def _to_numeric_series(df: pd.DataFrame, column_name: str) -> pd.Series:
+    if column_name not in df.columns:
+        return pd.Series(float("nan"), index=df.index, dtype="float64")
+    return pd.to_numeric(df[column_name], errors="coerce")
+
+
+def add_effective_value_column(df: pd.DataFrame, output_column: str = VALUE_EFFECTIVE_COLUMN) -> pd.DataFrame:
+    """
+    Erstellt eine numerische Spalte mit Fallback-Logik:
+    1) Value Converted, falls vorhanden
+    2) sonst Value Normalized (bzw. value_normalized)
+    """
+    out = df.copy()
+
+    converted = _to_numeric_series(out, "Value Converted")
+    normalized_col = "Value Normalized" if "Value Normalized" in out.columns else "value_normalized"
+    normalized = _to_numeric_series(out, normalized_col)
+
+    out[output_column] = converted.where(converted.notna(), normalized)
+    return out
+
+
+def apply_value_range_filter(
+    df: pd.DataFrame,
+    min_value=None,
+    max_value=None,
+    value_column: str = VALUE_EFFECTIVE_COLUMN,
+) -> pd.DataFrame:
+    """Filtert DataFrame nach optionaler Min/Max-Spanne auf einer numerischen Wertespalte."""
+    if min_value is None and max_value is None:
+        return df
+
+    out = df.copy()
+    numeric_values = _to_numeric_series(out, value_column)
+    mask = numeric_values.notna()
+
+    if min_value is not None:
+        try:
+            min_num = float(min_value)
+            mask = mask & (numeric_values >= min_num)
+        except (TypeError, ValueError):
+            pass
+
+    if max_value is not None:
+        try:
+            max_num = float(max_value)
+            mask = mask & (numeric_values <= max_num)
+        except (TypeError, ValueError):
+            pass
+
+    return out.loc[mask].reset_index(drop=True)
+
+
+def get_value_range_from_filters(regex_filters: dict | None):
+    if not regex_filters:
+        return None, None
+    return regex_filters.get("__value_min"), regex_filters.get("__value_max")
 
 
 def apply_master_mapping(df, mapping_dict):
@@ -257,15 +383,37 @@ def apply_master_mapping(df, mapping_dict):
         mapping_col = f"{col} Mapping"
         df[mapping_col] = ""
 
+        class_patterns = []
         for row in mapping_dict[col]:
             if not row or not row[0]:
                 continue
-            master = row[0]
-            variants = [v for v in row[1:] if v]
-            # Case-insensitive contains
-            pattern = "|".join([re.escape(master)] + [re.escape(v) for v in variants])
-            mask = df[col].str.contains(pattern, case=False, regex=True)
-            df.loc[mask, mapping_col] = master
+
+            master = str(row[0]).strip()
+            terms = _dedupe_values(row)
+            if not terms:
+                continue
+
+            class_pattern = "|".join(re.escape(term) for term in terms)
+            if class_pattern:
+                class_patterns.append((master, class_pattern))
+
+        if not class_patterns:
+            continue
+
+        class_masks = []
+        for master, class_pattern in class_patterns:
+            mask = df[col].fillna("").astype(str).str.contains(class_pattern, case=False, regex=True)
+            class_masks.append((master, mask))
+
+        # Nur genau eine Klasse darf matchen. Mehrfachtreffer über Klassen bleiben leer.
+        match_count = pd.Series(0, index=df.index)
+        for _, mask in class_masks:
+            match_count = match_count + mask.astype(int)
+
+        unique_class_mask = match_count == 1
+        for master, mask in class_masks:
+            assign_mask = unique_class_mask & mask
+            df.loc[assign_mask, mapping_col] = master
 
     return df
 
@@ -278,6 +426,7 @@ def unit_string_to_dimension(unit_str):
         return None
 
     try:
+        unit_parser = _get_unit_parser()
         parsed = unit_parser.parse(unit_str)
 
         # Compound
@@ -296,6 +445,25 @@ def unit_string_to_dimension(unit_str):
         return None
 
     return None
+
+
+def _is_unitless_alias(unit_str):
+    if not unit_str:
+        return False
+    return str(unit_str).strip().lower() in UNITLESS_ALIASES
+
+
+def _build_unitless_dimension_clause():
+    # Unterstützt leere/fehlende unit_dimension sowie typische
+    # dimensionslose Vektor-Repräsentationen wie [0, 0, ...] oder (0, 0, ...).
+    return (
+        "(unit_dimension IS NULL "
+        "OR TRIM(CAST(unit_dimension AS VARCHAR)) = '' "
+        "OR TRIM(CAST(unit_dimension AS VARCHAR)) = '[]' "
+        "OR LOWER(TRIM(CAST(unit_dimension AS VARCHAR))) = 'dimensionless' "
+        "OR regexp_matches(CAST(unit_dimension AS VARCHAR), '^\\s*\\[\\s*0(?:\\.0+)?(?:\\s*,\\s*0(?:\\.0+)?)*\\s*\\]\\s*$') "
+        "OR regexp_matches(CAST(unit_dimension AS VARCHAR), '^\\s*\\(\\s*0(?:\\.0+)?(?:\\s*,\\s*0(?:\\.0+)?)*\\s*\\)\\s*$'))"
+    )
 
 
 def get_columns():
@@ -485,6 +653,33 @@ def _build_exactly_one_match_clause(column, patterns):
         return ""
 
     return "(" + " + ".join(pattern_terms) + ") = 1"
+
+
+def _build_exactly_one_class_match_clause(column, class_groups):
+    class_terms = []
+    for group in class_groups or []:
+        tokens = _dedupe_values(group)
+        if not tokens:
+            continue
+
+        group_patterns = []
+        for token in tokens:
+            regex = _sql_quote(f"(?i).*{re.escape(token)}.*")
+            group_patterns.append(
+                f"regexp_matches(CAST(\"{column}\" AS VARCHAR), '{regex}')"
+            )
+
+        if not group_patterns:
+            continue
+
+        class_terms.append(
+            "CASE WHEN (" + " OR ".join(group_patterns) + ") THEN 1 ELSE 0 END"
+        )
+
+    if not class_terms:
+        return ""
+
+    return "(" + " + ".join(class_terms) + ") = 1"
 
 
 def _dedupe_values(values):

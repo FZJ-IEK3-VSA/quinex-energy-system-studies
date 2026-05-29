@@ -1,7 +1,7 @@
 import io
 import math
 import streamlit as st
-from utils import duckdb_filter
+from utils import duckdb_filter, unit_filter
 
 MAX_DOWNLOAD_ROWS = 100_000
 
@@ -12,6 +12,10 @@ def _get_total_pages(total_rows, rows_per_page):
 def prepare_csv(regex_filters, regex_mapping, total_rows):
     df_all = duckdb_filter.get_page(regex_filters, limit=total_rows, offset=0)
     df_all = duckdb_filter.apply_master_mapping(df_all, regex_mapping)
+    df_all = unit_filter.apply_unit_filters(df_all, regex_mapping)
+    df_all = duckdb_filter.add_effective_value_column(df_all)
+    value_min, value_max = duckdb_filter.get_value_range_from_filters(regex_filters)
+    df_all = duckdb_filter.apply_value_range_filter(df_all, min_value=value_min, max_value=value_max)
     csv_buffer = io.StringIO()
     df_all.to_csv(csv_buffer, index=False)
     st.session_state.download_csv = csv_buffer.getvalue()

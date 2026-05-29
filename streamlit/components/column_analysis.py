@@ -33,7 +33,55 @@ def _get_variants_for_masters(regex_mapping, col, selected_masters):
     return variants
 
 
-def render(regex_filters, regex_mapping=None):
+def _get_class_groups_for_masters(regex_mapping, col, selected_masters):
+    """Gibt die ausgewählten Klassen als Gruppen (Master + Keywords) zurück."""
+    selected = {m.strip() for m in selected_masters if isinstance(m, str) and m.strip()}
+    groups = []
+    for row in regex_mapping.get(col, []):
+        if not row or not row[0]:
+            continue
+        master = row[0].strip()
+        if master not in selected:
+            continue
+
+        seen = set()
+        tokens = []
+        for val in row:
+            token = val.strip() if isinstance(val, str) else ""
+            if not token:
+                continue
+            key = token.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            tokens.append(token)
+
+        if tokens:
+            groups.append(tokens)
+
+    return groups
+
+
+def _value_counts_from_dataframe(df, selected_col, top_n):
+    if selected_col not in df.columns:
+        return None
+
+    series = df[selected_col]
+    if selected_col == "Unit Normalized":
+        series = series.astype(str)
+
+    counts = (
+        series.dropna()
+        .astype(str)
+        .value_counts()
+        .head(top_n)
+        .rename_axis("value")
+        .reset_index(name="count")
+    )
+    return counts
+
+
+def render(regex_filters, regex_mapping=None, filtered_df_all=None):
     st.markdown("#### Column Frequency Analysis")
     st.caption("Select a column to see the most frequent values.")
 
@@ -69,9 +117,15 @@ def render(regex_filters, regex_mapping=None):
     if selected_entities:
         entity_variants = _get_variants_for_masters(regex_mapping, "Entity", selected_entities)
         active_filters["Entity"] = entity_variants
+        entity_groups = _get_class_groups_for_masters(regex_mapping, "Entity", selected_entities)
+        if entity_groups:
+            active_filters["__entity_groups"] = entity_groups
     if selected_properties:
         property_variants = _get_variants_for_masters(regex_mapping, "Property", selected_properties)
         active_filters["Property"] = property_variants
+        property_groups = _get_class_groups_for_masters(regex_mapping, "Property", selected_properties)
+        if property_groups:
+            active_filters["__property_groups"] = property_groups
 
     columns = [c for c in duckdb_filter.get_columns() if c in ALLOWED_COLUMNS]
 
@@ -82,7 +136,20 @@ def render(regex_filters, regex_mapping=None):
         top_n = st.slider("Top N", min_value=5, max_value=50, value=15, step=5, key="freq_top_n")
 
     if selected_col:
-        df_counts = duckdb_filter.get_value_counts(selected_col, regex_filters=active_filters, top_n=top_n)
+        if filtered_df_all is not None:
+            df_filtered = filtered_df_all.copy()
+
+            if selected_entities and "Entity Mapping" in df_filtered.columns:
+                df_filtered = df_filtered[df_filtered["Entity Mapping"].isin(selected_entities)]
+            if selected_properties and "Property Mapping" in df_filtered.columns:
+                df_filtered = df_filtered[df_filtered["Property Mapping"].isin(selected_properties)]
+
+            df_counts = _value_counts_from_dataframe(df_filtered, selected_col, top_n)
+            if df_counts is None:
+                st.info("No data available for this column.")
+                return
+        else:
+            df_counts = duckdb_filter.get_value_counts(selected_col, regex_filters=active_filters, top_n=top_n)
 
         if df_counts.empty:
             st.info("No data available for this column.")

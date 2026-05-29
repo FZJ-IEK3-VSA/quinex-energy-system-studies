@@ -1,48 +1,91 @@
 # quinex_application
 
-<a target="_blank" href="https://cookiecutter-data-science.drivendata.org/">
-    <img src="https://img.shields.io/badge/CCDS-Project%20template-328F97?logo=cookiecutter" />
-</a>
+Application of Quinex for scientific paper data analysis, including postprocessing,
+visualization, and an interactive Streamlit dashboard.
 
-Application of Quenix on a set of papers
+## Contents
 
-## Project Organization
+- [Project Structure](#project-structure)
+- [Requirements](#requirements)
+- [Setup](#setup)
+- [Run the Streamlit Dashboard](#run-the-streamlit-dashboard)
+- [Run the Notebooks](#run-the-notebooks)
+- [Troubleshooting](#troubleshooting)
 
-```
-├── README.md          <- The top-level README for developers using this project.
-├── data
-│   ├── external       <- Data from third party sources.
-│   ├── interim        <- Intermediate data that has been transformed.
-│   ├── processed      <- The final, canonical data sets for modeling.
-│   └── raw            <- The original, immutable data dump.  
-│
-├── pyproject.toml     <- Project configuration file with package metadata for 
-│                         quenix_application and configuration for tools like black
-│
-├── environment.yml    <- Reproducible Mamba environment
-│
-└── quinex_application   <- Source code for use in this project.
-    │
-    ├── __init__.py                 <- Makes quenix_application a Python module
-    │
-    ├── levenshtein.py              <- Code to calculate levenshtein distance
-    │
-    ├── mongo_store.py              <- Code to store results in mongodb
-    │
-    ├── oeoe_data.py                <- Code to load oeo data
-    │
-    ├── quinex.py                   <- Code to run Quenix
-    │
-    ├── scopus_data.py              <- Code to load scopus data
-    │
-    └── visualiation_metadata.py    <- Code to visualize metadata of papers
+## Project Structure
 
+```text
+.
+|-- environment.yml
+|-- pyproject.toml
+|-- data/
+|-- notebooks/
+|-- quinex_application/
+|   |-- postprocessing/
+|   |-- quinex_processing/
+|   `-- visualisation/
+`-- streamlit/
+    |-- streamlit_app.py
+    |-- components/
+    |-- utils/
+    `-- duckdb_data/
 ```
 
---------
+## Requirements
 
-## Setup (Mamba)
+- Mamba or Conda
+- Python 3.10 (see `environment.yml`)
 
-1. Create Environment
+## Setup
+
+Run from the project root:
+
 ```bash
 mamba env create -f environment.yml
+conda activate quinex_application
+pip install -e .
+```
+
+## Run the Streamlit Dashboard
+
+### Run locally
+
+From the project root:
+
+```bash
+streamlit run streamlit/streamlit_app.py
+```
+
+Open in your browser:
+
+- `http://127.0.0.1:8501`
+
+### Run for network access
+
+```bash
+streamlit run streamlit/streamlit_app.py --server.address 0.0.0.0 --server.port 8501
+```
+
+Then open it via the host IP, for example `http://<your-ip>:8501`.
+
+## Run the Notebooks
+
+The project pipeline is documented in the notebooks under `notebooks/`
+(for example `Step0_...` to `Step6_...`).
+
+Recommended order:
+
+1. `Step0_DoiCollection.ipynb`
+2. `Step1_QuinexPerforming.ipynb`
+3. `Step2_QuinexPostprocessing.ipynb`
+4. `Step3_RegexMapping.ipynb`
+5. `Step4_MetadataVisualisation.ipynb`
+6. `Step5_TemporalVisualisation.ipynb`
+7. `Step6_SpatialVisualisation.ipynb`
+
+## Troubleshooting
+
+- Port 8501 already in use:
+  `streamlit run streamlit/streamlit_app.py --server.port 8502`
+- Empty or missing data in the dashboard:
+  check whether `streamlit/duckdb_data/data.duckdb` exists.

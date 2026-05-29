@@ -21,6 +21,8 @@ dependencies:
   - plotly 
   - pyarrow
   - geopy
+  - streamlit
+  - duckdb
   - pip
   - pip:
      - quinex-utils

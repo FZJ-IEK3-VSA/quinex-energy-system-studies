@@ -257,9 +257,8 @@ def flatten_regex_filters(mapping_dict):
             if not isinstance(row, (list, tuple)):
                 continue
 
-            for val in row[1:]:  # nur Variants
-                if val:
-                    lst.append(val)
+            include_terms, _ = _split_row_terms(row, include_master=False)
+            lst.extend(include_terms)
         flat[col] = lst
 
         # Klassenweise Keywords fuer eindeutige Zuordnung speichern.
@@ -269,9 +268,12 @@ def flatten_regex_filters(mapping_dict):
             if not isinstance(row, (list, tuple)) or not row:
                 continue
 
-            row_terms = _dedupe_values(row)
-            if row_terms:
-                class_groups.append(row_terms)
+            include_terms, exclude_terms = _split_row_terms(row, include_master=True)
+            if include_terms:
+                class_groups.append({
+                    "include": include_terms,
+                    "exclude": exclude_terms,
+                })
 
         if class_groups:
             flat[f"__{col.lower()}_groups"] = class_groups
@@ -389,20 +391,24 @@ def apply_master_mapping(df, mapping_dict):
                 continue
 
             master = str(row[0]).strip()
-            terms = _dedupe_values(row)
-            if not terms:
+            include_terms, exclude_terms = _split_row_terms(row, include_master=True)
+            if not include_terms:
                 continue
 
-            class_pattern = "|".join(re.escape(term) for term in terms)
-            if class_pattern:
-                class_patterns.append((master, class_pattern))
+            include_pattern = "|".join(re.escape(term) for term in include_terms)
+            exclude_pattern = "|".join(re.escape(term) for term in exclude_terms)
+            if include_pattern:
+                class_patterns.append((master, include_pattern, exclude_pattern))
 
         if not class_patterns:
             continue
 
         class_masks = []
-        for master, class_pattern in class_patterns:
-            mask = df[col].fillna("").astype(str).str.contains(class_pattern, case=False, regex=True)
+        for master, include_pattern, exclude_pattern in class_patterns:
+            mask = df[col].fillna("").astype(str).str.contains(include_pattern, case=False, regex=True)
+            if exclude_pattern:
+                exclude_mask = df[col].fillna("").astype(str).str.contains(exclude_pattern, case=False, regex=True)
+                mask = mask & (~exclude_mask)
             class_masks.append((master, mask))
 
         # Nur genau eine Klasse darf matchen. Mehrfachtreffer über Klassen bleiben leer.
@@ -658,22 +664,43 @@ def _build_exactly_one_match_clause(column, patterns):
 def _build_exactly_one_class_match_clause(column, class_groups):
     class_terms = []
     for group in class_groups or []:
-        tokens = _dedupe_values(group)
-        if not tokens:
+        include_tokens = []
+        exclude_tokens = []
+
+        if isinstance(group, dict):
+            include_tokens = _dedupe_values(group.get("include", []))
+            exclude_tokens = _dedupe_values(group.get("exclude", []))
+        else:
+            include_tokens = _dedupe_values(group)
+
+        if not include_tokens:
             continue
 
-        group_patterns = []
-        for token in tokens:
+        include_patterns = []
+        for token in include_tokens:
             regex = _sql_quote(f"(?i).*{re.escape(token)}.*")
-            group_patterns.append(
+            include_patterns.append(
                 f"regexp_matches(CAST(\"{column}\" AS VARCHAR), '{regex}')"
             )
 
-        if not group_patterns:
+        if not include_patterns:
             continue
 
+        include_clause = "(" + " OR ".join(include_patterns) + ")"
+
+        exclude_clause = ""
+        if exclude_tokens:
+            exclude_patterns = []
+            for token in exclude_tokens:
+                regex = _sql_quote(f"(?i).*{re.escape(token)}.*")
+                exclude_patterns.append(
+                    f"regexp_matches(CAST(\"{column}\" AS VARCHAR), '{regex}')"
+                )
+            if exclude_patterns:
+                exclude_clause = " AND NOT (" + " OR ".join(exclude_patterns) + ")"
+
         class_terms.append(
-            "CASE WHEN (" + " OR ".join(group_patterns) + ") THEN 1 ELSE 0 END"
+            "CASE WHEN (" + include_clause + exclude_clause + ") THEN 1 ELSE 0 END"
         )
 
     if not class_terms:
@@ -695,6 +722,47 @@ def _dedupe_values(values):
         seen.add(key)
         result.append(token)
     return result
+
+
+def _split_row_terms(row, include_master=True):
+    include_terms = []
+    exclude_terms = []
+
+    values = row if include_master else row[1:]
+    for val in values:
+        token = str(val).strip() if isinstance(val, str) else ""
+        if not token:
+            continue
+
+        normalized_exclusion = _normalize_exclusion_token(token)
+        if normalized_exclusion is not None:
+            exclude_terms.append(normalized_exclusion)
+        else:
+            include_terms.append(token)
+
+    return _dedupe_values(include_terms), _dedupe_values(exclude_terms)
+
+
+def _normalize_exclusion_token(token: str):
+    if not token:
+        return None
+
+    stripped = token.strip()
+    if not stripped:
+        return None
+
+    lowered = stripped.lower()
+    if stripped.startswith("!"):
+        candidate = stripped[1:].strip()
+        return candidate if candidate else None
+    if lowered.startswith("not:"):
+        candidate = stripped[4:].strip()
+        return candidate if candidate else None
+    if lowered.startswith("exclude:"):
+        candidate = stripped[8:].strip()
+        return candidate if candidate else None
+
+    return None
 
 
 def _parse_list_like(value):

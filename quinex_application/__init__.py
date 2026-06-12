@@ -6,7 +6,8 @@ and extracted data from the quinex system.
 
 Modules:
     - metadata_visualisation: Visualization for paper metadata (countries, SJR, trends)
-    - quinex_visualisation: Visualization for extracted research data
+    - temporal_visualisation: Visualization for extracted research data over time
+    - spatial_visualisation: Visualization for spatial distribution of research data
     - plot_utils: Common plotting utilities and styling functions
     - data_processing: Data transformation and statistical functions
     - country_codes: ISO country code mappings and geographic constants
@@ -14,7 +15,8 @@ Modules:
 
 # Core visualization classes
 from .visualisation.metadata_visualisation import VisualisationMetadata
-from .visualisation.quinex_visualisation import QuinexVisualisation
+from .visualisation.temporal_visualisation import TemporalVisualisation
+from .visualisation.spatial_visualisation import SpatialVisualisation
 
 # Utility modules
 from .visualisation import plot_utils
@@ -48,7 +50,8 @@ from .postprocessing.spatial_normalization import (
 __all__ = [
     # Classes
     'VisualisationMetadata',
-    'QuinexVisualisation',
+    'TemporalVisualisation',
+    'SpatialVisualisation',
     
     # Modules
     'plot_utils',

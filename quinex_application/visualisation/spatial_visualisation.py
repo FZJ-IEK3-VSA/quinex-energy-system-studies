@@ -1,20 +1,12 @@
-"""
-Quinex visualization module for research data analysis.
+﻿"""Spatial visualization methods for Quinex."""
 
-This module provides visualization functions for analyzing extracted
-research data, including temporal trends, spatial distributions,
-and multi-dataset comparisons.
-"""
-
-import os
 import math
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import matplotlib.ticker as mticker
+import seaborn as sns
 from matplotlib.colors import LogNorm
 from matplotlib.gridspec import GridSpec
-import seaborn as sns
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import cartopy.io.shapereader as shpreader
@@ -24,494 +16,48 @@ from quinex_application.visualisation.plot_utils import (
     set_font_sizes,
     setup_plotting_environment,
     create_size_legend,
-    create_line_legend_handles,
     calculate_marker_sizes,
-    map_values_to_sizes,
     get_color_map,
-    create_entity_color_palette,
     style_legend_frame,
     flatten_axes,
 )
+from quinex_application.visualisation.entity_colors import DEFAULT_ENTITY_COLORS
 from quinex_application.postprocessing.data_processing import (
-    convert_unit,
-    convert_row,
     apply_iqr_filter,
-    parse_temporal_scope,
-    filter_by_min_papers,
     parse_spatial_scope,
     apply_jitter_to_datasets,
     calculate_aggregates,
-    reference_contains_term
 )
 
 
-# =============================================================================
-# Default Entity Colors
-# =============================================================================
+class SpatialVisualisation:
+    """Spatial and map visualization functionality."""
 
-DEFAULT_ENTITY_COLORS = {
-    "Battery": "#8b0000",
-    "Lithium-Ion Battery": "#ff0000",
-    "Lead Acid Battery": "#4E0000",
-    "PV": "#ffd700",
-    "Utility-Scale PV": "#ff9900",
-    "Wind Turbine": "#1e90ff",
-    "Wind": "#1e90ff",
-    "Onshore Wind": "#8bc5ff",
-    "Offshore Wind": "#06223f",
-    "Hydrogen": "#46250f",
-    "Electrolyzer": "#32cd32",
-    "Coal": "#ff69b4",
-    "GB": "#dd8452",
-    "US": "#c44e52",
-    "CA": "#8b008b",
-}
-
-
-class QuinexVisualisation:
-    """
-    Visualizes research data extracted using quinex.
-    
-    Provides methods for temporal trends, spatial distributions,
-    and comparative analysis across multiple datasets.
-    """
-    
     def __init__(self):
-        """Initialize the visualization client with default settings."""
+        """Initialize spatial visualization defaults and entity colors."""
         pd.set_option('display.max_colwidth', None)
-        
+
         self.color = sns.color_palette("dark:steelblue", 6)[2]
         self.color2 = sns.color_palette("dark:cyan", 6)[2]
         self.entity_colors = DEFAULT_ENTITY_COLORS.copy()
-        
+
         setup_plotting_environment()
 
-    # =========================================================================
-    # Data Loading
-    # =========================================================================
+    def _resolve_existing_column(self, df: pd.DataFrame, candidates: list) -> str | None:
+        """Return first matching column from candidates (case-insensitive)."""
+        if df is None or df.empty:
+            return None
 
-    def load_df(self, path: str = "df_quinex.parquet") -> pd.DataFrame:
-        """
-        Load DataFrame from disk.
-        
-        Args:
-            path: File path of the saved DataFrame.
-            
-        Returns:
-            Loaded DataFrame.
-            
-        Raises:
-            FileNotFoundError: If file doesn't exist.
-        """
-        if not os.path.exists(path):
-            raise FileNotFoundError(f"No saved DataFrame found at '{path}'")
-
-        df = pd.read_parquet(path)
-        print(f"📂 Loaded DataFrame from '{path}' with {len(df)} rows")
-        return df
-
-    # =========================================================================
-    # Unit Conversion (delegates to data_processing module)
-    # =========================================================================
-
-    def convert_unit(self, value, input_unit, output_unit, year, parse=False):
-        """Convert value between units using the quinex API."""
-        return convert_unit(value, input_unit, output_unit, year, parse)
-    
-    def convert_row(self, row, target_unit, year=None):
-        """Convert a DataFrame row's value to target unit."""
-        return convert_row(row, target_unit, year)
-
-    # =========================================================================
-    # Basic Plots
-    # =========================================================================
-
-    def plot_top_values(
-        self,
-        df: pd.DataFrame,
-        column: str,
-        top_n: int = 10,
-        ignore_empty: bool = True,
-        figsize: tuple = (6, 6),
-    ):
-        """
-        Create a bar plot of the top N most frequent values.
-        
-        Args:
-            df: DataFrame containing the data.
-            column: Column name to analyze.
-            top_n: Number of top values to display.
-            ignore_empty: Whether to exclude empty/null values.
-            figsize: Figure size.
-            title: Plot title.
-            
-        Returns:
-            Matplotlib figure.
-        """
-        data = df[column]
-
-        if ignore_empty:
-            data = data.dropna()
-
-        cleaned_data = (
-            data.astype(str)
-            .str.replace(r"\s+", " ", regex=True)
-            .str.strip()
-        )
-        cleaned_data = cleaned_data[cleaned_data != ""]
-
-        value_counts = cleaned_data.value_counts().nlargest(top_n)
-
-        fig, ax = plt.subplots(figsize=figsize)
-        sns.barplot(x=value_counts.values, y=value_counts.index, ax=ax, color="steelblue")
-
-        ax.set_xlabel("Count")
-        ax.set_ylabel(column.capitalize())
-        ax.grid(axis='x')
-
-        plt.tight_layout()
-        return fig
-
-    # =========================================================================
-    # Temporal Trend Plots
-    # =========================================================================
-
-    def plot_multiple_properties_over_time(
-        self,
-        data_list: list,
-        legend_title: str,
-        color_dict: dict = None,
-        figsize: tuple = (16, 8),
-        legend_position: tuple = (1, 1),
-        legend_size_position: tuple = (1, 0),
-        central_tendency: str = "mean",
-        error_type: str = "se",
-        error_display: str = None,
-        iqr_filter: bool = True,
-        font_size: int = 14,
-        number_xticks: int = 5,
-        point_size_range: tuple = (50, 200),
-        temporal_col: str = "temporal_scope",
-        publicationyear_col: str = "publication_year",
-        min_datapoints_per_year: int = 5,
-        min_papers_per_year: int = None,
-    ):
-        """
-        Plot properties over time with customizable styling and statistics.
-        
-        Args:
-            data_list: List of dicts with 'df', 'entity_col', 'value_col', 'ylabel', 'title',
-                       and optionally:
-                       - 'additional_data' (DataFrame with columns 'year', 'entity', 'value')
-                         which is plotted as raw dashed lines
-                       - 'year_range' (tuple of min, max year) to set the x-axis range
-                       - 'y_range' (tuple of min, max value) to set the y-axis range
-                       - 'min_datapoints_per_year' (int) to override global min for this entry
-                       - 'min_papers_per_year' (int) to override global min for this entry
-                       - 'number_xticks' (int) to override global x-tick interval for this entry
-            legend_title: Title for the color legend.
-            color_dict: Optional color mapping for entities.
-            figsize: Figure size.
-            legend_position: Position for color legend.
-            legend_size_position: Position for size legend.
-            central_tendency: 'mean', 'median', or 'moving average'.
-            error_type: 'se' (standard error) or 'ci' (confidence interval).
-            error_display: 'bars', 'shade', or None.
-            iqr_filter: Whether to remove outliers using IQR.
-            font_size: Font size for labels.
-            number_xticks: Interval for x-axis ticks.
-            point_size_range: Range for marker sizes (min, max).
-            temporal_col: Column containing temporal scope.
-            publicationyear_col: Column containing publication year.
-            min_datapoints_per_year: Minimum data points required per year.
-            min_papers_per_year: Minimum unique papers required per year.
-            
-        Returns:
-            Tuple of (fig, data_tables) where:
-                - fig: Matplotlib figure
-                - data_tables: Dictionary mapping subplot titles to their aggregated data (DataFrames)
-        """
-        set_font_sizes(font_size)
-
-        n_plots = len(data_list)
-        ncols = 2 if n_plots > 1 else 1
-        nrows = math.ceil(n_plots / ncols)
-
-        fig, axes = plt.subplots(nrows, ncols, figsize=figsize, sharey=False)
-        axes = flatten_axes(axes, n_plots)
-
-        # Prepare data and get global parameters
-        prepared_data = self._prepare_temporal_data(
-            data_list, 
-            iqr_filter, 
-            temporal_col, 
-            publicationyear_col, 
-            min_papers_per_year, 
-            min_datapoints_per_year, 
-            central_tendency, 
-            error_type
-        )
-
-        all_entities, all_n_vals, color_dict = self._get_global_plot_params(
-            prepared_data, color_dict
-        )
-
-        min_n, max_n = min(all_n_vals), max(all_n_vals)
-
-        # Plot each subplot and collect data tables
-        data_tables = {}
-        for i, (ax, data) in enumerate(zip(axes, data_list)):
-            agg_df = prepared_data[i]['agg_df']
-            entity_col = data['entity_col']
-            ylabel = data['ylabel']
-            title = data.get('title', '')
-            xticks = data.get('number_xticks', number_xticks)
-
-            additional_data = data.get('additional_data', None)
-            year_range = data.get('year_range', None)
-            y_range = data.get('y_range', None)
-
-            self._plot_temporal_subplot(
-                ax, agg_df, entity_col, color_dict,
-                min_n, max_n, point_size_range,
-                error_type, error_display, ylabel, title, xticks,
-                additional_data=additional_data, year_range=year_range, y_range=y_range
-            )
-            
-            # Store the aggregated data for this subplot
-            data_tables[title] = agg_df
-
-        # Add legends
-        self._add_temporal_legends(
-            fig, all_entities, all_n_vals, color_dict,
-            legend_title, legend_position, legend_size_position, point_size_range
-        )
-
-        plt.tight_layout()
-        return fig, data_tables
-
-    def _prepare_temporal_data(
-        self,
-        data_list: list,
-        iqr_filter: bool,
-        temporal_col: str,
-        publicationyear_col: str,
-        min_papers_per_year: int,
-        min_datapoints_per_year: int,
-        central_tendency: str,
-        error_type: str
-    ) -> list:
-        """Prepare data for temporal plots.
-        
-        Each entry in data_list can override min_papers_per_year and min_datapoints_per_year.
-        """
-        prepared = []
-
-        for data in data_list:
-            df = data['df'].copy()
-            entity_col = data['entity_col']
-            value_col = data['value_col']
-            
-            # Allow per-entry override of min thresholds
-            entry_min_papers = data.get('min_papers_per_year', min_papers_per_year)
-            entry_min_datapoints = data.get('min_datapoints_per_year', min_datapoints_per_year)
-
-            if iqr_filter:
-                df = apply_iqr_filter(df, value_col, entity_col)
-
-            df = parse_temporal_scope(df, temporal_col, publicationyear_col)
-            df = filter_by_min_papers(df, 'jahr', min_papers=entry_min_papers)
-
-            agg_df = calculate_aggregates(
-                df, entity_col, value_col, 'jahr', central_tendency, error_type
-            )
-            agg_df = agg_df[agg_df['n'] >= entry_min_datapoints]
-
-            prepared.append({
-                'df': df,
-                'agg_df': agg_df,
-                'entity_col': entity_col,
-                'value_col': value_col
-            })
-
-        return prepared
-
-    def _get_global_plot_params(
-        self,
-        prepared_data: list,
-        color_dict: dict
-    ) -> tuple:
-        """Get global parameters across all subplots."""
-        all_entities = []
-        all_n_vals = []
-
-        for data in prepared_data:
-            agg_df = data['agg_df']
-            entity_col = data['entity_col']
-            all_entities.extend(agg_df[entity_col].unique())
-            all_n_vals.extend(agg_df['n'].dropna().astype(int).unique())
-
-        all_entities = sorted(list(set(all_entities)))
-        all_n_vals = sorted(list(set(all_n_vals)))
-
-        if color_dict is None:
-            color_dict = create_entity_color_palette(all_entities)
-
-        return all_entities, all_n_vals, color_dict
-
-    def _plot_temporal_subplot(
-        self,
-        ax,
-        agg_df: pd.DataFrame,
-        entity_col: str,
-        color_dict: dict,
-        min_n: float,
-        max_n: float,
-        size_range: tuple,
-        error_type: str,
-        error_display: str,
-        ylabel: str,
-        title: str,
-        number_xticks: int,
-        additional_data: pd.DataFrame = None,
-        year_range: tuple = None,
-        y_range: tuple = None
-    ):
-        """Plot a single temporal subplot."""
-        # Map sizes
-        agg_df = agg_df.copy()
-        agg_df['size_mapped'] = map_values_to_sizes(
-            agg_df['n'].fillna(min_n).values, min_n, max_n, size_range
-        )
-
-        # Line plot
-        sns.lineplot(
-            data=agg_df,
-            x='jahr', y='value_central',
-            hue=entity_col, palette=color_dict, ax=ax
-        )
-
-        # Scatter plot
-        ax.scatter(
-            agg_df['jahr'], agg_df['value_central'],
-            s=agg_df['size_mapped'],
-            c=agg_df[entity_col].map(color_dict),
-            edgecolor='w', linewidth=0.3, alpha=0.9
-        )
-
-        # Error display
-        if error_display:
-            self._add_error_display(ax, agg_df, entity_col, color_dict, error_type, error_display)
-
-        # Styling
-        ax.set_xlabel('Year')
-        ax.set_ylabel(ylabel)
-        ax.grid(linestyle='--', alpha=0.6)
-        ax.xaxis.set_major_locator(mticker.MultipleLocator(number_xticks))
-        ax.set_title(title, loc='left', fontweight='bold')
-        
-        # Set x-axis range if provided
-        if year_range is not None:
-            ax.set_xlim(year_range[0], year_range[1])
-
-        # Set y-axis range if provided
-        if y_range is not None:
-            ax.set_ylim(y_range[0], y_range[1])
-
-        # Additional data (raw values, dashed lines)
-        if additional_data is not None:
-            for entity in additional_data['entity'].unique():
-                entity_df = additional_data[additional_data['entity'] == entity].sort_values('year')
-                color = color_dict.get(entity, 'gray')
-                ax.plot(
-                    entity_df['year'], entity_df['value'],
-                    color=color, linestyle='--', linewidth=6, alpha=0.8
-                )
-
-        if ax.get_legend() is not None:
-            ax.get_legend().remove()
-
-    def _add_error_display(
-        self,
-        ax,
-        agg_df: pd.DataFrame,
-        entity_col: str,
-        color_dict: dict,
-        error_type: str,
-        error_display: str
-    ):
-        """Add error bars or shading to plot."""
-        for entity in agg_df[entity_col].unique():
-            entity_df = agg_df[agg_df[entity_col] == entity].copy()
-
-            if error_display == "bars":
-                self._add_error_bars(ax, entity_df, error_type)
-            elif error_display == "shade":
-                self._add_error_shade(ax, entity_df, color_dict[entity], error_type)
-
-    def _add_error_bars(self, ax, entity_df: pd.DataFrame, error_type: str):
-        """Add error bars to plot."""
-        if error_type == "se" and 'se' in entity_df.columns:
-            yerr = entity_df['se']
-        elif error_type == "ci" and 'ci' in entity_df.columns:
-            yerr = entity_df['ci']
-        else:
-            return
-
-        ax.errorbar(
-            x=entity_df['jahr'], y=entity_df['value_central'],
-            yerr=yerr, fmt='none',
-            ecolor='gray', elinewidth=1, capsize=3, alpha=0.6
-        )
-
-    def _add_error_shade(self, ax, entity_df: pd.DataFrame, color, error_type: str):
-        """Add error shading to plot."""
-        entity_df = entity_df.sort_values('jahr')
-
-        if error_type == "se" and 'se' in entity_df.columns:
-            lower = entity_df['value_central'] - entity_df['se']
-            upper = entity_df['value_central'] + entity_df['se']
-        elif error_type == "ci" and 'ci_lower' in entity_df.columns:
-            lower = entity_df['ci_lower']
-            upper = entity_df['ci_upper']
-        else:
-            return
-
-        ax.fill_between(entity_df['jahr'], lower, upper, color=color, alpha=0.2)
-
-    def _add_temporal_legends(
-        self,
-        fig,
-        all_entities: list,
-        all_n_vals: list,
-        color_dict: dict,
-        legend_title: str,
-        legend_position: tuple,
-        legend_size_position: tuple,
-        size_range: tuple
-    ):
-        """Add color and size legends to temporal plot."""
-        # Color legend
-        handles = create_line_legend_handles(all_entities, color_dict)
-        fig.legend(
-            handles=handles, labels=all_entities,
-            title=legend_title, bbox_to_anchor=legend_position, loc='upper left'
-        )
-
-        # Size legend
-        ax_temp = fig.axes[0]
-        size_handles = create_size_legend(
-            ax_temp, np.sort(np.unique(all_n_vals)),
-            size_range[0], size_range[1]
-        )
-        fig.legend(
-            handles=size_handles, title='Sample Size',
-            bbox_to_anchor=legend_size_position, loc='upper left'
-        )
-
-    # =========================================================================
-    # Spatial Plots (World Map)
-    # =========================================================================
+        lower_to_original = {col.lower(): col for col in df.columns}
+        for candidate in candidates:
+            if not candidate:
+                continue
+            if candidate in df.columns:
+                return candidate
+            resolved = lower_to_original.get(str(candidate).lower())
+            if resolved is not None:
+                return resolved
+        return None
 
     def plot_multiple_datasets_on_world(
         self,
@@ -524,10 +70,17 @@ class QuinexVisualisation:
         font_size: int = 14,
         log_scale: bool = False,
         apply_iqr: bool = True,
+        iqr_lower_quantile: float = 0.25,
+        iqr_upper_quantile: float = 0.75,
+        iqr_multiplier: float = 1.5,
         continent: str = None,
         country_column: str = "country",
         aggregation: str = "mean",
         spatial_extent: list = None,
+        color_scale_range: tuple = None,
+        colorbar_ticks: list = None,
+        doi_col: str = "DOI",
+        print_summary: bool = True,
     ):
         """
         Plot multiple datasets on a world map with color-coded values.
@@ -554,8 +107,8 @@ class QuinexVisualisation:
             - 'show_rivers' (bool): Whether to draw rivers on the map (default: False).
             - 'show_roads' (bool or str): Whether to draw roads on the map (default: False).
               Uses Natural Earth 10m roads data. Accepted values:
-              ``True`` / ``'all'`` – all roads; ``'highway'`` – Major Highways only;
-              ``'secondary'`` – Major + Secondary Highways.
+              ``True`` / ``'all'`` â€“ all roads; ``'highway'`` â€“ Major Highways only;
+              ``'secondary'`` â€“ Major + Secondary Highways.
             - 'show_cities' (bool or int): Whether to draw the largest cities on the map
               (default: False). If ``True``, the 10 largest cities are shown. Pass an
               ``int`` to control how many cities to display (e.g. ``5`` for top 5).
@@ -572,11 +125,21 @@ class QuinexVisualisation:
             font_size: Font size.
             log_scale: Whether to use logarithmic color scale.
             apply_iqr: Whether to filter outliers.
+            iqr_lower_quantile: Lower quantile for IQR filter (default 0.25 = Q1).
+            iqr_upper_quantile: Upper quantile for IQR filter (default 0.75 = Q3).
+            iqr_multiplier: Multiplier for IQR fence (default 1.5, Tukey method).
             continent: Default continent to display (can be overridden per dataset).
             spatial_extent: Default custom extent [lon_min, lon_max, lat_min, lat_max]
                 (can be overridden per dataset). If set, takes precedence over continent.
             country_column: Column name containing ISO-3 country codes.
             aggregation: Aggregation method for choropleth ('mean', 'median', 'sum', 'min', 'max').
+            color_scale_range: Optional tuple (vmin, vmax) for the color scale.
+                If None, the range is inferred from data (default behavior).
+            colorbar_ticks: Optional list of values to mark on the colorbar.
+                If None, matplotlib uses automatic ticks (default behavior).
+            doi_col: Default DOI column used to count contributing studies.
+                Can be overridden per dataset via dataset['doi_col'].
+            print_summary: Whether to print filter and DOI summary stats.
             
         Returns:
             Tuple of (fig, data_tables) where:
@@ -620,6 +183,14 @@ class QuinexVisualisation:
         # Apply jitter (only relevant for point mode)
         jittered_datasets = apply_jitter_to_datasets(datasets, jitter_strength)
 
+        for data in jittered_datasets:
+            data['_iqr_applied'] = False
+            data['_rows_before_iqr'] = len(data.get('df', []))
+            data['_rows_after_iqr'] = len(data.get('df', []))
+            data['_iqr_removed_rows'] = 0
+            data['_contributing_dois'] = set()
+            data['_doi_col_used'] = None
+
         # Get entity markers
         entity_marker_map = self._create_entity_marker_map(jittered_datasets)
 
@@ -627,7 +198,11 @@ class QuinexVisualisation:
         map_jittered = [d for d in jittered_datasets if d.get('plot_mode', 'points') != 'size']
         scalar_map = self._prepare_color_scale(
             map_jittered, cmap, log_scale, apply_iqr,
+            iqr_lower_quantile=iqr_lower_quantile,
+            iqr_upper_quantile=iqr_upper_quantile,
+            iqr_multiplier=iqr_multiplier,
             country_column=country_column, aggregation=aggregation,
+            color_scale_range=color_scale_range,
         )
 
         # Plot each subplot
@@ -638,6 +213,10 @@ class QuinexVisualisation:
             plot_mode = data.get('plot_mode', 'points')
             dataset_extent = data.get('spatial_extent', spatial_extent)
             dataset_continent = data.get('continent', continent)
+            entry_doi_col = self._resolve_existing_column(
+                data.get('df'), [data.get('doi_col', doi_col), 'DOI', 'doi']
+            )
+            data['_doi_col_used'] = entry_doi_col
 
             if plot_mode == 'size':
                 # Plot bubble chart on its dedicated axis
@@ -659,6 +238,15 @@ class QuinexVisualisation:
                         if scatter_data is not None:
                             title = data.get('title', f'size_plot_{i}')
                             data_tables[title] = scatter_data
+
+                        data['_contributing_dois'] = self._collect_world_size_contributing_dois(
+                            data=data,
+                            ghi_data=ghi_data,
+                            country_column=country_column,
+                            value_column=data.get('value_column'),
+                            min_datapoints=data.get('min_datapoints', 1),
+                            doi_col=entry_doi_col,
+                        )
             elif plot_mode == 'choropleth':
                 self._plot_world_choropleth_subplot(
                     axes[i], data, scalar_map, dataset_continent,
@@ -670,6 +258,12 @@ class QuinexVisualisation:
                     show_roads=data.get('show_roads', False),
                     show_cities=data.get('show_cities', False),
                 )
+                data['_contributing_dois'] = self._collect_world_choropleth_contributing_dois(
+                    data=data,
+                    country_column=country_column,
+                    value_column=data.get('value_column'),
+                    doi_col=entry_doi_col,
+                )
             else:  # points mode
                 self._plot_world_subplot(
                     axes[i], data, entity_marker_map, scalar_map,
@@ -679,6 +273,10 @@ class QuinexVisualisation:
                     show_roads=data.get('show_roads', False),
                     show_cities=data.get('show_cities', False),
                 )
+                data['_contributing_dois'] = self._collect_world_points_contributing_dois(
+                    data=data,
+                    doi_col=entry_doi_col,
+                )
 
         # Add colorbar (only for map subplots)
         map_axes = [a for a in axes if a is not None]
@@ -686,9 +284,14 @@ class QuinexVisualisation:
             if has_any_size:
                 cbar_ax = fig.add_axes([0.92, 0.55, 0.015, 0.35])
                 cbar = plt.colorbar(scalar_map, cax=cbar_ax)
+                if colorbar_ticks is not None:
+                    cbar.set_ticks(colorbar_ticks)
                 cbar.ax.set_ylabel(colorbar_title or "Value", fontsize=font_size)
             else:
-                self._add_world_colorbar(fig, map_axes, scalar_map, colorbar_title, font_size)
+                self._add_world_colorbar(
+                    fig, map_axes, scalar_map, colorbar_title, font_size,
+                    colorbar_ticks=colorbar_ticks,
+                )
 
         if not has_any_size:
             plt.subplots_adjust(
@@ -696,7 +299,130 @@ class QuinexVisualisation:
                 right=0.88 if scalar_map else 0.98
             )
 
+        if print_summary:
+            self._print_world_generation_summary(jittered_datasets, apply_iqr)
+
         return fig, data_tables
+
+    def _collect_world_points_contributing_dois(self, data: dict, doi_col: str | None) -> set:
+        """Collect unique DOIs contributing to a points-mode world plot."""
+        df = data.get('df')
+        if doi_col is None or df is None or doi_col not in df.columns:
+            return set()
+
+        dois = set(df[doi_col].dropna().astype(str).str.strip())
+        dois.discard('')
+        return dois
+
+    def _collect_world_choropleth_contributing_dois(
+        self,
+        data: dict,
+        country_column: str,
+        value_column: str | None,
+        doi_col: str | None,
+    ) -> set:
+        """Collect unique DOIs contributing to a choropleth world plot."""
+        df = data.get('df')
+        if doi_col is None or df is None or doi_col not in df.columns:
+            return set()
+        if value_column is None or country_column not in df.columns or value_column not in df.columns:
+            return set()
+
+        df_clean = df.copy()
+        df_clean['country_norm'] = df_clean[country_column].apply(normalize_country_code)
+        df_clean = df_clean.dropna(subset=['country_norm', value_column])
+
+        dois = set(df_clean[doi_col].dropna().astype(str).str.strip())
+        dois.discard('')
+        return dois
+
+    def _collect_world_size_contributing_dois(
+        self,
+        data: dict,
+        ghi_data: dict,
+        country_column: str,
+        value_column: str | None,
+        min_datapoints: int,
+        doi_col: str | None,
+    ) -> set:
+        """Collect unique DOIs contributing to a size-mode world plot."""
+        df = data.get('df')
+        if doi_col is None or df is None or doi_col not in df.columns:
+            return set()
+        if value_column is None or country_column not in df.columns or value_column not in df.columns:
+            return set()
+
+        df_clean = df.copy()
+        df_clean['country_norm'] = df_clean[country_column].apply(normalize_country_code)
+        df_clean = df_clean.dropna(subset=['country_norm', value_column])
+        if df_clean.empty:
+            return set()
+
+        country_count = df_clean.groupby('country_norm')[value_column].count()
+        valid_countries = set(country_count.index)
+        if min_datapoints > 1:
+            valid_countries = set(country_count[country_count >= min_datapoints].index)
+
+        if not valid_countries:
+            return set()
+
+        ghi_countries = set(pd.Series(list(ghi_data.keys())).dropna().astype(str))
+        valid_countries = {c for c in valid_countries if c in ghi_countries}
+        if not valid_countries:
+            return set()
+
+        contributing_df = df_clean[df_clean['country_norm'].isin(valid_countries)]
+        dois = set(contributing_df[doi_col].dropna().astype(str).str.strip())
+        dois.discard('')
+        return dois
+
+    def _print_world_generation_summary(self, datasets: list, apply_iqr: bool):
+        """Print per-dataset filter stats and overall unique DOI contribution."""
+        print("\n=== World Plot Generation Summary ===")
+
+        total_unique_dois = set()
+        doi_available_any = False
+
+        for idx, data in enumerate(datasets, start=1):
+            title = data.get('title') or f"Dataset {idx}"
+            plot_mode = data.get('plot_mode', 'points')
+
+            if data.get('_iqr_applied', False):
+                removed = int(data.get('_iqr_removed_rows', 0))
+                before = int(data.get('_rows_before_iqr', 0))
+                after = int(data.get('_rows_after_iqr', 0))
+                print(
+                    f"[{idx}] {title} ({plot_mode}) | IQR removed: {removed} values "
+                    f"(before={before}, after={after})"
+                )
+            else:
+                if apply_iqr and plot_mode == 'size':
+                    print(f"[{idx}] {title} ({plot_mode}) | IQR filter not applied in size mode")
+                elif apply_iqr:
+                    print(f"[{idx}] {title} ({plot_mode}) | IQR filter not applied")
+                else:
+                    print(f"[{idx}] {title} ({plot_mode}) | IQR filter disabled")
+
+            doi_col = data.get('_doi_col_used')
+            dataset_dois = data.get('_contributing_dois', set())
+            if doi_col is None:
+                print("    Contributing studies: DOI column not found")
+                continue
+
+            doi_available_any = True
+            total_unique_dois.update(dataset_dois)
+            print(
+                f"    Contributing studies ({doi_col}): "
+                f"{len(dataset_dois)} unique DOI(s)"
+            )
+
+        if doi_available_any:
+            print(
+                "Total contributing studies in this generated figure: "
+                f"{len(total_unique_dois)} unique DOI(s)"
+            )
+        else:
+            print("Total contributing studies in this generated figure: DOI column unavailable")
 
     def _create_entity_marker_map(self, datasets: list) -> dict:
         """Create marker mapping for entities."""
@@ -718,8 +444,12 @@ class QuinexVisualisation:
         cmap: str,
         log_scale: bool,
         apply_iqr: bool,
+        iqr_lower_quantile: float = 0.25,
+        iqr_upper_quantile: float = 0.75,
+        iqr_multiplier: float = 1.5,
         country_column: str = "country",
         aggregation: str = "mean",
+        color_scale_range: tuple = None,
     ):
         """Prepare color scale for world map."""
         has_value = any(d.get("value_column") for d in datasets)
@@ -734,14 +464,27 @@ class QuinexVisualisation:
 
             df = data["df"].copy()
             ent_col = data.get("entity_column")
+            rows_before_iqr = len(df)
 
             if apply_iqr and pd.api.types.is_numeric_dtype(df[val_col]):
                 if ent_col:
-                    df = apply_iqr_filter(df, val_col, ent_col)
+                    df = apply_iqr_filter(df, val_col, ent_col,
+                                          lower_quantile=iqr_lower_quantile,
+                                          upper_quantile=iqr_upper_quantile,
+                                          iqr_multiplier=iqr_multiplier)
                 else:
                     df = apply_iqr_filter(
-                        df.assign(dummy="x"), val_col, "dummy"
+                        df.assign(dummy="x"), val_col, "dummy",
+                        lower_quantile=iqr_lower_quantile,
+                        upper_quantile=iqr_upper_quantile,
+                        iqr_multiplier=iqr_multiplier,
                     ).drop(columns="dummy")
+                data['_iqr_applied'] = True
+
+            rows_after_iqr = len(df)
+            data['_rows_before_iqr'] = rows_before_iqr
+            data['_rows_after_iqr'] = rows_after_iqr
+            data['_iqr_removed_rows'] = rows_before_iqr - rows_after_iqr
 
             df = df.dropna(subset=[val_col])
             data['df'] = df
@@ -767,13 +510,31 @@ class QuinexVisualisation:
 
         all_vals = pd.concat(all_vals)
 
+        if color_scale_range is not None:
+            if len(color_scale_range) != 2:
+                raise ValueError("color_scale_range must be a tuple of (vmin, vmax).")
+            vmin, vmax = color_scale_range
+            if vmin is None or vmax is None:
+                raise ValueError("color_scale_range values cannot be None.")
+            vmin = float(vmin)
+            vmax = float(vmax)
+            if vmin > vmax:
+                vmin, vmax = vmax, vmin
+        else:
+            vmin = float(all_vals.min())
+            vmax = float(all_vals.max())
+
         if log_scale:
-            min_pos = all_vals[all_vals > 0].min()
-            vmin = max(min_pos, 1e-12)
-            vmax = all_vals.max()
+            if vmin <= 0:
+                raise ValueError("For log_scale=True, color_scale_range vmin must be > 0.")
+            if color_scale_range is None:
+                min_pos = all_vals[all_vals > 0].min()
+                vmin = max(float(min_pos), 1e-12)
+            else:
+                vmin = max(vmin, 1e-12)
             norm = LogNorm(vmin=vmin, vmax=vmax)
         else:
-            norm = plt.Normalize(vmin=all_vals.min(), vmax=all_vals.max())
+            norm = plt.Normalize(vmin=vmin, vmax=vmax)
 
         return plt.cm.ScalarMappable(cmap=cmap, norm=norm)
 
@@ -809,7 +570,7 @@ class QuinexVisualisation:
             self._add_roads_to_ax(ax, show_roads)
 
         # Set extent (spatial_extent takes precedence over continent)
-        # For global/world views, set_global() is sufficient — calling set_extent
+        # For global/world views, set_global() is sufficient â€” calling set_extent
         # with [-180,180] in PlateCarree would clip the Robinson oval to a rectangle.
         if spatial_extent:
             ax.set_extent(spatial_extent, crs=ccrs.PlateCarree())
@@ -880,7 +641,7 @@ class QuinexVisualisation:
             self._add_roads_to_ax(ax, show_roads)
 
         # Set extent (spatial_extent takes precedence over continent)
-        # For global/world views, set_global() is sufficient — calling set_extent
+        # For global/world views, set_global() is sufficient â€” calling set_extent
         # with [-180,180] in PlateCarree would clip the Robinson oval to a rectangle.
         if spatial_extent:
             ax.set_extent(spatial_extent, crs=ccrs.PlateCarree())
@@ -984,12 +745,12 @@ class QuinexVisualisation:
         Args:
             ax: Cartopy GeoAxes to draw on.
             road_type: One of:
-                - True / 'all'          — all roads in the dataset
-                - 'highway'             — Major Highways only
-                - 'secondary'           — Major + Secondary Highways
+                - True / 'all'          â€” all roads in the dataset
+                - 'highway'             â€” Major Highways only
+                - 'secondary'           â€” Major + Secondary Highways
         """
         ROAD_TYPE_FILTER = {
-            True:        None,          # no filter → all roads
+            True:        None,          # no filter â†’ all roads
             'all':       None,
             'highway':   {'Major Highway'},
             'secondary': {'Major Highway', 'Secondary Highway'},
@@ -1017,8 +778,8 @@ class QuinexVisualisation:
         Args:
             ax: Cartopy GeoAxes to draw on.
             city_option: One of:
-                - True   — show the 10 largest cities
-                - int    — show the N largest cities
+                - True   â€” show the 10 largest cities
+                - int    â€” show the N largest cities
         """
         n_cities = city_option if isinstance(city_option, int) else 10
 
@@ -1058,7 +819,8 @@ class QuinexVisualisation:
         axes,
         scalar_map,
         colorbar_title: str,
-        font_size: int
+        font_size: int,
+        colorbar_ticks: list = None,
     ):
         """Add colorbar to world map figure."""
         cbar = plt.colorbar(
@@ -1066,6 +828,8 @@ class QuinexVisualisation:
             orientation="vertical",
             fraction=0.005, pad=0.01, shrink=0.5
         )
+        if colorbar_ticks is not None:
+            cbar.set_ticks(colorbar_ticks)
         cbar.ax.set_ylabel(colorbar_title or "Value", fontsize=font_size)
 
     def _load_ghi_data(self, ghi_data_path: str) -> dict:
@@ -1081,7 +845,7 @@ class QuinexVisualisation:
         """
         ghi_df = pd.read_excel(ghi_data_path)
 
-        # Build name → ISO3 mapping from Natural Earth shapefile
+        # Build name â†’ ISO3 mapping from Natural Earth shapefile
         shpfilename = shpreader.natural_earth(
             resolution='110m', category='cultural', name='admin_0_countries'
         )
@@ -1280,7 +1044,7 @@ class QuinexVisualisation:
             )
 
         # Styling
-        ax.set_xlabel('Solar Radiation GHI [kWh/m²/day]', fontsize=font_size - 1)
+        ax.set_xlabel('Solar Radiation GHI [kWh/mÂ²/day]', fontsize=font_size - 1)
         ax.set_ylabel(title if title else 'Value', fontsize=font_size - 1)
         ax.set_title(f'{title}', fontsize=font_size, fontweight='bold', loc='left', pad=10)
         ax.tick_params(labelsize=font_size - 2)
@@ -1521,3 +1285,4 @@ class QuinexVisualisation:
         )
         ax.add_artist(color_legend)
         style_legend_frame(color_legend)
+

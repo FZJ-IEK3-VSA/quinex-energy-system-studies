@@ -44,6 +44,12 @@ def inject_mapping_card_styles():
             border: 1px solid rgba(100, 116, 139, 0.35);
             background: rgba(148, 163, 184, 0.12);
         }
+        .mapping-chip.hidden-chip {
+            background: rgba(156, 163, 175, 0.12) !important;
+            border-color: rgba(148, 163, 184, 0.18) !important;
+            color: rgba(55, 65, 81, 0.9) !important;
+            opacity: 0.95;
+        }
         .mapping-empty {
             border-radius: 12px;
             border: 1px dashed rgba(148, 163, 184, 0.6);
@@ -77,6 +83,14 @@ def inject_mapping_card_styles():
             padding: 0.42rem 0.56rem !important;
             line-height: 1.25 !important;
         }
+        [data-testid="stTextArea"] textarea[aria-label="Exclude Keywords"] {
+            background: rgba(239, 68, 68, 0.12) !important;
+            border-color: rgba(220, 38, 38, 0.55) !important;
+        }
+        [data-testid="stTextArea"] textarea[aria-label="Exclude Keywords"]:focus {
+            border-color: rgba(220, 38, 38, 0.9) !important;
+            box-shadow: 0 0 0 1px rgba(220, 38, 38, 0.28) !important;
+        }
         [data-testid="stTextArea"] label {
             margin-bottom: 0.15rem !important;
         }
@@ -99,6 +113,18 @@ def render_keyword_chips(variants):
         [f"<span class='mapping-chip'>{html.escape(chip)}</span>" for chip in chips[:10]]
     )
     st.markdown(f"<div class='mapping-chip-wrap'>{safe_chips}</div>", unsafe_allow_html=True)
+
+
+def render_hidden_label_chip(label: str):
+    """Render a small, subtle chip for a hidden class label."""
+    txt = str(label).strip() if label is not None else ""
+    if not txt:
+        return
+    safe = html.escape(txt)
+    st.markdown(
+        f"<div class='mapping-chip-wrap'><span class='mapping-chip hidden-chip'>{safe}</span></div>",
+        unsafe_allow_html=True,
+    )
 
 
 def render_mapping_empty_state(col_name: str):

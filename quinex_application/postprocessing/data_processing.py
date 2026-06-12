@@ -187,8 +187,8 @@ def apply_iqr_filter(
     df: pd.DataFrame,
     value_column: str,
     group_column: str,
-    lower_quantile: float = 0.2,
-    upper_quantile: float = 0.8,
+    lower_quantile: float = 0.25,
+    upper_quantile: float = 0.75,
     iqr_multiplier: float = 1.5
 ) -> pd.DataFrame:
     """
@@ -198,8 +198,8 @@ def apply_iqr_filter(
         df: Input DataFrame.
         value_column: Column to filter outliers from.
         group_column: Column to group by for IQR calculation.
-        lower_quantile: Lower quantile boundary (default 0.2).
-        upper_quantile: Upper quantile boundary (default 0.8).
+        lower_quantile: Lower quantile boundary (default 0.25 = Q1, Tukey method).
+        upper_quantile: Upper quantile boundary (default 0.75 = Q3, Tukey method).
         iqr_multiplier: Multiplier for IQR range (default 1.5).
         
     Returns:

@@ -10,7 +10,12 @@ BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__)))
 sys.path.append(os.path.abspath(os.path.join(BASE_DIR, "..", "..")))
 
 
-from quinex_application.visualisation.quinex_visualisation import QuinexVisualisation  # Klasse mit den Plot-Funktionen
+from quinex_application.visualisation.temporal_visualisation import TemporalVisualisation
+from quinex_application.visualisation.spatial_visualisation import SpatialVisualisation
+
+
+class QuinexVisualisation(TemporalVisualisation, SpatialVisualisation):
+    """Streamlit-local compatibility wrapper for temporal and spatial visualization."""
 
 def _get_vis():
     if "vis" not in st.session_state:

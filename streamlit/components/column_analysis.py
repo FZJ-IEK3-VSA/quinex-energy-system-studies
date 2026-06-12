@@ -29,12 +29,15 @@ def _get_variants_for_masters(regex_mapping, col, selected_masters):
         if row and row[0] and row[0].strip() in selected_masters:
             for val in row:
                 if val and val.strip():
-                    variants.append(val.strip())
+                    token = val.strip()
+                    if _is_exclusion_keyword(token):
+                        continue
+                    variants.append(token)
     return variants
 
 
 def _get_class_groups_for_masters(regex_mapping, col, selected_masters):
-    """Gibt die ausgewählten Klassen als Gruppen (Master + Keywords) zurück."""
+    """Gibt die ausgewählten Klassen als include/exclude-Gruppen zurück."""
     selected = {m.strip() for m in selected_masters if isinstance(m, str) and m.strip()}
     groups = []
     for row in regex_mapping.get(col, []):
@@ -44,22 +47,63 @@ def _get_class_groups_for_masters(regex_mapping, col, selected_masters):
         if master not in selected:
             continue
 
-        seen = set()
-        tokens = []
+        include_seen = set()
+        exclude_seen = set()
+        include_tokens = []
+        exclude_tokens = []
         for val in row:
             token = val.strip() if isinstance(val, str) else ""
             if not token:
                 continue
-            key = token.lower()
-            if key in seen:
-                continue
-            seen.add(key)
-            tokens.append(token)
 
-        if tokens:
-            groups.append(tokens)
+            normalized_exclusion = _normalize_exclusion_token(token)
+            if normalized_exclusion is not None:
+                key = normalized_exclusion.lower()
+                if key in exclude_seen:
+                    continue
+                exclude_seen.add(key)
+                exclude_tokens.append(normalized_exclusion)
+                continue
+
+            key = token.lower()
+            if key in include_seen:
+                continue
+            include_seen.add(key)
+            include_tokens.append(token)
+
+        if include_tokens:
+            groups.append({
+                "include": include_tokens,
+                "exclude": exclude_tokens,
+            })
 
     return groups
+
+
+def _normalize_exclusion_token(token: str):
+    if not token:
+        return None
+
+    stripped = token.strip()
+    if not stripped:
+        return None
+
+    lowered = stripped.lower()
+    if stripped.startswith("!"):
+        candidate = stripped[1:].strip()
+        return candidate if candidate else None
+    if lowered.startswith("not:"):
+        candidate = stripped[4:].strip()
+        return candidate if candidate else None
+    if lowered.startswith("exclude:"):
+        candidate = stripped[8:].strip()
+        return candidate if candidate else None
+
+    return None
+
+
+def _is_exclusion_keyword(token: str) -> bool:
+    return _normalize_exclusion_token(token) is not None
 
 
 def _value_counts_from_dataframe(df, selected_col, top_n):

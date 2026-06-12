@@ -5,6 +5,42 @@ from components import mapping_cards
 PROPERTY_AUX_FIELDS = ("Unit", "Year")
 
 
+def _ensure_hidden_state(col_name, groups):
+    if "regex_hidden_groups" not in st.session_state:
+        st.session_state.regex_hidden_groups = {}
+
+    hidden = st.session_state.regex_hidden_groups.get(col_name)
+    if not isinstance(hidden, list):
+        hidden = [False] * len(groups)
+
+    if len(hidden) < len(groups):
+        hidden.extend([False] * (len(groups) - len(hidden)))
+    elif len(hidden) > len(groups):
+        hidden = hidden[: len(groups)]
+
+    st.session_state.regex_hidden_groups[col_name] = hidden
+
+
+def _delete_hidden_row(col_name, row_idx):
+    if "regex_hidden_groups" not in st.session_state:
+        return
+
+    hidden = st.session_state.regex_hidden_groups.get(col_name)
+    if isinstance(hidden, list) and len(hidden) > row_idx:
+        del hidden[row_idx]
+
+
+def _add_hidden_row(col_name):
+    if "regex_hidden_groups" not in st.session_state:
+        st.session_state.regex_hidden_groups = {}
+
+    hidden = st.session_state.regex_hidden_groups.get(col_name)
+    if not isinstance(hidden, list):
+        hidden = []
+    hidden.append(False)
+    st.session_state.regex_hidden_groups[col_name] = hidden
+
+
 def _mark_publication_year_modified():
     st.session_state["meta_publication_year_user_modified"] = True
 
@@ -16,6 +52,57 @@ def _parse_keywords(raw_keywords: str):
 
     normalized = raw_keywords.replace("\n", ",").replace(";", ",")
     return [k.strip() for k in normalized.split(",") if k.strip()]
+
+
+def _normalize_exclusion_token(token: str):
+    if not token:
+        return None
+
+    stripped = token.strip()
+    if not stripped:
+        return None
+
+    lowered = stripped.lower()
+    if stripped.startswith("!"):
+        candidate = stripped[1:].strip()
+        return candidate if candidate else None
+    if lowered.startswith("not:"):
+        candidate = stripped[4:].strip()
+        return candidate if candidate else None
+    if lowered.startswith("exclude:"):
+        candidate = stripped[8:].strip()
+        return candidate if candidate else None
+
+    return None
+
+
+def _split_keywords_by_polarity(keywords):
+    include_seen = set()
+    exclude_seen = set()
+    include_terms = []
+    exclude_terms = []
+
+    for raw in keywords:
+        token = str(raw).strip() if isinstance(raw, str) else ""
+        if not token:
+            continue
+
+        exclusion = _normalize_exclusion_token(token)
+        if exclusion is not None:
+            key = exclusion.lower()
+            if key in exclude_seen:
+                continue
+            exclude_seen.add(key)
+            exclude_terms.append(exclusion)
+            continue
+
+        key = token.lower()
+        if key in include_seen:
+            continue
+        include_seen.add(key)
+        include_terms.append(token)
+
+    return include_terms, exclude_terms
 
 
 def _parse_float_optional(raw_value):
@@ -35,26 +122,29 @@ def _render_readme_section():
     with st.sidebar:
         st.markdown("### README")
         st.markdown(
-            """
-            This dashboard helps you explore technoeconomic data for energy technologies.
+                        """
+                        Quick start — first-time user guide
 
-            **What it does**
-            - Maps raw values to standardized Entity and Property classes
-            - Supports optional unit conversion rules per Property class
-            - Filters metadata (origin, publication year, temporal scope, spatial scope)
-            - Shows table output and visual summaries (frequency, temporal, spatial)
+                        1) Define mappings (left tabs):
+                             - `Entity Filtering`: Create classes (e.g. Battery, Photovoltaic)
+                                - Grey Box: Add keywords that identify matching records. Use commas or new lines to enter multiple keywords.
+                                - Red Box: Add keywords to exclude matches.
+                             - `Property Filtering`: Create classes (e.g. Lifetime, Efficiency).
+                                - Grey Box: Add keywords that identify matching records. Use commas or new lines to enter multiple keywords.                    
+                                - Red Box: Add keywords to exclude matches.
+                                - Add a Unit Filter for each property for conversions and a Year if the unit is a currency.
 
-            **How to use it**
-            1. Add or edit Entity and Property classes with matching keywords.
-            2. For Property classes, optionally define Unit and Year constraints.
-            3. Apply metadata filters.
-            4. Inspect results in tabs and export filtered data.
+                        2) Filter metadata (Filters expander):
+                             - Narrow the dataset by author origin, publication year, temporal or spatial scope,
+                                 or numeric value range. Facets react to each other so the available options update
+                                 based on your selections.
 
-            **Tips**
-            - Use concise class labels for cleaner mappings.
-            - Add multiple keywords per class to improve match coverage.
-            - Leave Unit/Year empty if no conversion is required.
-            """
+                        3) Explore results (main tabs):
+                             - `Data`: paginated table of matched rows. Use "Rows per page" and the download
+                                 controls to export filtered results.
+                             - `Column Frequency`: frequency counts of mapped classes and keywords.
+                             - `Temporal Plot` / `Spatial Plot`: visual summaries for time series and spatial data.
+                        """
         )
 
 
@@ -92,6 +182,10 @@ def _render_mapping_filter(col_name):
     
     groups = st.session_state.regex_groups[col_name]
     new_groups = []
+    active_groups = []
+
+    _ensure_hidden_state(col_name, groups)
+    hidden_flags = st.session_state.regex_hidden_groups.get(col_name, [False] * len(groups))
 
     # Unit-Filter vorbereiten, falls noch nicht existiert
     if col_name == "Property":
@@ -113,18 +207,23 @@ def _render_mapping_filter(col_name):
         with target_col:
             master_key = f"{col_name}_master_{row_idx}"
             keywords_key = f"{col_name}_keywords_{row_idx}"
+            exclude_keywords_key = f"{col_name}_exclude_keywords_{row_idx}"
 
             if master_key not in st.session_state:
                 st.session_state[master_key] = master
 
-            keywords_string = ", ".join(
-                [v.strip() for v in variants if isinstance(v, str) and v.strip()]
-            )
+            include_variants, exclude_variants = _split_keywords_by_polarity(variants)
+            keywords_string = ", ".join(include_variants)
+            exclude_keywords_string = ", ".join(exclude_variants)
             if keywords_key not in st.session_state:
                 st.session_state[keywords_key] = keywords_string
+            if exclude_keywords_key not in st.session_state:
+                st.session_state[exclude_keywords_key] = exclude_keywords_string
 
             live_master = st.session_state.get(master_key, master)
-            title = live_master.strip() if isinstance(live_master, str) and live_master.strip() else f"Class {row_idx + 1}"
+            is_hidden = bool(hidden_flags[row_idx]) if row_idx < len(hidden_flags) else False
+            title_base = live_master.strip() if isinstance(live_master, str) and live_master.strip() else f"Class {row_idx + 1}"
+            title = f"{title_base} (hidden)" if is_hidden else title_base
             with st.expander(title, expanded=(row_idx < 2)):
                 with st.container(border=False):
                     new_master = st.text_input(
@@ -143,6 +242,18 @@ def _render_mapping_filter(col_name):
                     )
                     new_variants = _parse_keywords(raw_keywords)
                     mapping_cards.render_keyword_chips(new_variants)
+
+                    raw_exclude_keywords = st.text_area(
+                        "Exclude Keywords",
+                        key=exclude_keywords_key,
+                        height=50,
+                        placeholder="keyword that must not match",
+                        help="Terms entered here are stored as !keyword and exclude matches for this class.",
+                        label_visibility="collapsed",
+                    )
+                    new_exclude_variants = _parse_keywords(raw_exclude_keywords)
+                    if new_exclude_variants:
+                        mapping_cards.render_keyword_chips([f"!{k}" for k in new_exclude_variants])
 
                     if col_name == "Property":
                         _ensure_property_aux_row(row_idx)
@@ -175,25 +286,49 @@ def _render_mapping_filter(col_name):
                             )
                             st.session_state.regex_groups["Year"][row_idx][0] = new_year
 
-                    action_cols = st.columns([1, 1.4])
-                    with action_cols[1]:
-                        if st.button("Delete class", key=f"{col_name}_delrow_{row_idx}"):
-                            del st.session_state.regex_groups[col_name][row_idx]
-                            if col_name == "Property":
-                                _delete_property_aux_row(row_idx)
-                            st.rerun()
+                    # Action buttons: place Hide/Unhide and Delete next to each other bottom-left
+                    action_cols = st.columns([1, 3])
+                    with action_cols[0]:
+                        btns = st.columns([1, 1])
+                        with btns[0]:
+                            toggle_label = "Unhide class" if is_hidden else "Hide class"
+                            if st.button(toggle_label, key=f"{col_name}_toggle_hidden_{row_idx}"):
+                                hidden_flags[row_idx] = not is_hidden
+                                st.session_state.regex_hidden_groups[col_name] = hidden_flags
+                                st.rerun()
+                        with btns[1]:
+                            if st.button("Delete class", key=f"{col_name}_delrow_{row_idx}"):
+                                del st.session_state.regex_groups[col_name][row_idx]
+                                _delete_hidden_row(col_name, row_idx)
+                                if col_name == "Property":
+                                    _delete_property_aux_row(row_idx)
+                                st.rerun()
 
                     # Datenstruktur unveraendert: [class_label, keyword1, keyword2, ...]
-                    new_groups.append([new_master] + (new_variants if new_variants else [""]))
+                    # Ausschluss-Keywords werden als !keyword serialisiert.
+                    serialized_excludes = [f"!{k}" for k in new_exclude_variants]
+                    all_terms = new_variants + serialized_excludes
+                    serialized_row = [new_master] + (all_terms if all_terms else [""])
+                    new_groups.append(serialized_row)
+                    if not is_hidden:
+                        active_groups.append(serialized_row)
 
     if st.button("+ Add class", key=f"{col_name}_addrow", use_container_width=True):
         st.session_state.regex_groups[col_name].append(["", ""])
+        _add_hidden_row(col_name)
         if col_name == "Property":
             _add_property_aux_row()
         st.rerun()
 
     st.session_state.regex_groups[col_name] = new_groups
-    return new_groups
+
+    visible_indices = [idx for idx, hidden in enumerate(hidden_flags) if not hidden]
+    if col_name == "Property":
+        st.session_state.property_visible_indices = visible_indices
+    if col_name == "Entity":
+        st.session_state.entity_visible_indices = visible_indices
+
+    return active_groups
 
 
 def _render_metadata_filters(facet_base_filters=None):

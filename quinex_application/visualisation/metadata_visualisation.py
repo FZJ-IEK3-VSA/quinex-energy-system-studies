@@ -11,6 +11,7 @@ import glob
 import os
 import re
 import math
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import matplotlib.pyplot as plt
@@ -207,7 +208,10 @@ class VisualisationMetadata:
         normalize_by_gdp: bool = False,
         gdp_excel_path: str = None,
         max_year: int = None,
-        country_groups: dict = None
+        country_groups: dict = None,
+        add_regression_lines: bool = True,
+        regression_start_year: int = None,
+        regression_end_year: int = None
     ):
         """
         Plot country share of papers and average SJR.
@@ -227,6 +231,9 @@ class VisualisationMetadata:
             gdp_excel_path: Path to GDP Excel file.
             max_year: Maximum year to include.
             country_groups: Dict mapping group names to country code lists.
+            add_regression_lines: Draw log-linear trend lines per country in plot a.
+            regression_start_year: Optional first year for regression fit.
+            regression_end_year: Optional last year for regression fit.
             
         Returns:
             Tuple of (figure, pivot_data, scatter_data).
@@ -251,6 +258,7 @@ class VisualisationMetadata:
 
         # Prepare data
         metadata_df = self._filter_by_max_year(metadata_df, max_year)
+        self._validate_regression_years(regression_start_year, regression_end_year)
         self._print_missing_info(metadata_df)
         df_clean = self._clean_country_data(metadata_df)
 
@@ -281,7 +289,8 @@ class VisualisationMetadata:
         fig = self._create_country_share_figure(
             pivot_share_year, scatter_data, top_countries_line,
             figsize, color_map, legend_loc, legend_bbox,
-            normalize_by_population, normalize_by_gdp, country_groups
+            normalize_by_population, normalize_by_gdp, country_groups,
+            add_regression_lines, regression_start_year, regression_end_year
         )
 
         return fig, pivot_share_year, scatter_data
@@ -321,16 +330,32 @@ class VisualisationMetadata:
             return df[df['publication_year'] <= max_year].copy()
         return df
 
+    def _validate_regression_years(self, start_year: int, end_year: int):
+        """Validate optional regression year bounds."""
+        if start_year is not None and end_year is not None and start_year > end_year:
+            raise ValueError("regression_start_year must be <= regression_end_year.")
+
     def _to_country_list(self, value) -> list:
         """Convert country field to a list of ISO2 country codes."""
-        if pd.isna(value):
-            return []
-
         if isinstance(value, list):
             return [str(v).strip() for v in value if pd.notna(v) and str(v).strip()]
 
         if isinstance(value, tuple):
             return [str(v).strip() for v in value if pd.notna(v) and str(v).strip()]
+
+        if isinstance(value, set):
+            return [str(v).strip() for v in value if pd.notna(v) and str(v).strip()]
+
+        if hasattr(value, 'tolist') and not isinstance(value, str):
+            value_list = value.tolist()
+            if isinstance(value_list, (list, tuple)):
+                return [str(v).strip() for v in value_list if pd.notna(v) and str(v).strip()]
+
+        try:
+            if pd.isna(value):
+                return []
+        except (TypeError, ValueError):
+            pass
 
         if isinstance(value, str):
             text = value.strip()
@@ -605,7 +630,10 @@ class VisualisationMetadata:
         legend_bbox: tuple,
         normalize_by_population: bool,
         normalize_by_gdp: bool,
-        country_groups: dict
+        country_groups: dict,
+        add_regression_lines: bool,
+        regression_start_year: int,
+        regression_end_year: int
     ):
         """Create the country share figure with line and scatter plots."""
         fig, axes = plt.subplots(1, 2, figsize=figsize)
@@ -613,9 +641,12 @@ class VisualisationMetadata:
 
         # Line plot
         self._plot_country_lines(
-            axes[0], pivot_data, color_map, normalize
+            axes[0], pivot_data, color_map, normalize,
+            add_regression_lines, regression_start_year, regression_end_year
         )
-        self._style_line_plot(axes[0], normalize_by_population, normalize_by_gdp)
+        self._style_line_plot(
+            axes[0], normalize_by_population, normalize_by_gdp, add_regression_lines
+        )
 
         # Scatter plot
         self._plot_country_scatter(
@@ -635,19 +666,88 @@ class VisualisationMetadata:
         ax,
         pivot_data: pd.DataFrame,
         color_map: dict,
-        normalize: bool
+        normalize: bool,
+        add_regression_lines: bool,
+        regression_start_year: int,
+        regression_end_year: int
     ):
         """Plot country share lines."""
         for country in pivot_data.columns:
             color = color_map.get(country) if color_map else None
-            y_values = pivot_data[country] if normalize else pivot_data[country] * 100
+
+            raw_values = pivot_data[country].astype(float)
+            y_values = raw_values if normalize else raw_values * 100
+            trend_years, trend_values, percent_per_year = self._fit_log_linear_trend(
+                pivot_data.index,
+                raw_values,
+                regression_start_year,
+                regression_end_year
+            )
+
+            if percent_per_year is None:
+                label = country
+            else:
+                label = f"{country} ({percent_per_year:+.1f}%/yr)"
+
             ax.plot(
                 pivot_data.index, y_values,
                 linestyle='-', marker='o', markersize=0,
-                linewidth=2, label=country, color=color
+                linewidth=2, label=label, color=color
             )
 
-    def _style_line_plot(self, ax, normalize_by_population: bool, normalize_by_gdp: bool):
+            if add_regression_lines and trend_years is not None and trend_values is not None:
+                trend_display = trend_values if normalize else trend_values * 100
+                ax.plot(
+                    trend_years,
+                    trend_display,
+                    linestyle='--',
+                    linewidth=1.8,
+                    color=color,
+                    alpha=0.9,
+                    label='_nolegend_'
+                )
+
+    def _fit_log_linear_trend(
+        self,
+        years,
+        values,
+        regression_start_year: int,
+        regression_end_year: int
+    ) -> tuple:
+        """Fit log-linear trend and return fitted values and annual percent change."""
+        years_arr = np.asarray(years, dtype=float)
+        values_arr = np.asarray(values, dtype=float)
+
+        period_mask = np.ones_like(years_arr, dtype=bool)
+        if regression_start_year is not None:
+            period_mask &= years_arr >= float(regression_start_year)
+        if regression_end_year is not None:
+            period_mask &= years_arr <= float(regression_end_year)
+
+        fit_mask = period_mask & np.isfinite(values_arr) & (values_arr > 0)
+        if fit_mask.sum() < 2:
+            return None, None, None
+
+        x_fit = years_arr[fit_mask]
+        y_fit = values_arr[fit_mask]
+
+        slope, intercept = np.polyfit(x_fit, np.log(y_fit), 1)
+        annual_percent_change = (math.exp(slope) - 1) * 100
+
+        trend_years = years_arr[period_mask]
+        if trend_years.size == 0:
+            return None, None, annual_percent_change
+
+        trend_values = np.exp(intercept + slope * trend_years)
+        return trend_years, trend_values, annual_percent_change
+
+    def _style_line_plot(
+        self,
+        ax,
+        normalize_by_population: bool,
+        normalize_by_gdp: bool,
+        add_regression_lines: bool
+    ):
         """Style the line plot axis."""
         ax.set_title("a", loc='left', fontweight='bold')
         ax.set_xlabel("Publication Year")
@@ -658,6 +758,18 @@ class VisualisationMetadata:
             ax.set_ylabel("GDP-relative\npublications")
         else:
             ax.set_ylabel("Share of Papers [%]")
+
+        if add_regression_lines:
+            ax.text(
+                0.01,
+                0.98,
+                "Dashed: log-linear trend (%/yr in legend)",
+                transform=ax.transAxes,
+                ha='left',
+                va='top',
+                fontsize=9,
+                alpha=0.8
+            )
         
         ax.grid(True, linestyle='--', linewidth=0.7, alpha=0.9)
 
@@ -778,6 +890,7 @@ class VisualisationMetadata:
         top_n: int = 6,
         figsize: tuple = (16, 6),
         cmap: str = "viridis",
+        color_scale_percent: tuple = None,
         font_size: int = 12,
         n_cols: int = 2
     ):
@@ -792,6 +905,7 @@ class VisualisationMetadata:
             top_n: Number of top entities to show.
             figsize: Base figure size.
             cmap: Colormap name.
+            color_scale_percent: Optional tuple (min_percent, max_percent) for color scale.
             font_size: Font size.
             n_cols: Number of columns in grid.
             
@@ -815,19 +929,20 @@ class VisualisationMetadata:
         pivots, vmax_global = self._prepare_heatmap_pivots(
             dfs, entity_col, year_col, global_top_entities
         )
+        vmin, vmax = self._resolve_color_scale_percent(color_scale_percent, vmax_global)
 
         # Create figure
         fig, axes = self._create_heatmap_grid(n_plots, n_cols, figsize)
 
         # Plot heatmaps
         for idx, (ax, pivot, title) in enumerate(zip(axes, pivots, titles)):
-            self._plot_single_heatmap(ax, pivot, cmap, vmax_global, title)
+            self._plot_single_heatmap(ax, pivot, cmap, vmin, vmax, title)
             self._style_heatmap_axes(ax, idx, n_cols, n_plots)
 
         hide_empty_axes(axes, n_plots)
 
         # Add colorbar
-        self._add_heatmap_colorbar(fig, axes[:n_plots], cmap, vmax_global)
+        self._add_heatmap_colorbar(fig, axes[:n_plots], cmap, vmin, vmax)
 
         fig.tight_layout(rect=[0, 0.12, 1, 1])
         return fig, pivots
@@ -903,13 +1018,35 @@ class VisualisationMetadata:
 
         return fig, flatten_axes(axes, n_plots)
 
-    def _plot_single_heatmap(self, ax, pivot, cmap: str, vmax: float, title: str):
+    def _plot_single_heatmap(self, ax, pivot, cmap: str, vmin: float, vmax: float, title: str):
         """Plot a single heatmap."""
         sns.heatmap(
             pivot, ax=ax, cmap=cmap,
-            vmin=0, vmax=vmax, cbar=False, linewidths=0.5
+            vmin=vmin, vmax=vmax, cbar=False, linewidths=0.5
         )
         ax.set_title(title, loc='left', fontweight='bold')
+
+    def _resolve_color_scale_percent(self, color_scale_percent: tuple, data_vmax: float) -> tuple:
+        """Resolve optional percent tuple to heatmap vmin/vmax in share scale (0..1)."""
+        if color_scale_percent is None:
+            return 0, data_vmax
+
+        if not isinstance(color_scale_percent, tuple) or len(color_scale_percent) != 2:
+            raise ValueError("color_scale_percent must be a tuple like (0, 60).")
+
+        min_percent, max_percent = color_scale_percent
+        try:
+            min_percent = float(min_percent)
+            max_percent = float(max_percent)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("color_scale_percent must contain numeric values.") from exc
+
+        if min_percent < 0 or max_percent < 0:
+            raise ValueError("color_scale_percent values must be non-negative.")
+        if max_percent <= min_percent:
+            raise ValueError("color_scale_percent requires max > min.")
+
+        return min_percent / 100, max_percent / 100
 
     def _style_heatmap_axes(self, ax, idx: int, n_cols: int, n_plots: int):
         """Style heatmap axes based on position in grid."""
@@ -939,9 +1076,9 @@ class VisualisationMetadata:
             ax.set_xticklabels([])
             ax.set_xlabel("")
 
-    def _add_heatmap_colorbar(self, fig, axes, cmap: str, vmax: float):
+    def _add_heatmap_colorbar(self, fig, axes, cmap: str, vmin: float, vmax: float):
         """Add shared colorbar to heatmap figure."""
-        sm = ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=0, vmax=vmax))
+        sm = ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=vmin, vmax=vmax))
         sm.set_array([])
 
         cbar = fig.colorbar(
@@ -961,6 +1098,7 @@ class VisualisationMetadata:
         top_n: int = 6,
         figsize: tuple = (16, 6),
         cmap: str = "viridis",
+        color_scale_percent: tuple = None,
         font_size: int = 12
     ):
         """
@@ -974,6 +1112,7 @@ class VisualisationMetadata:
             top_n: Number of top items to show.
             figsize: Figure size.
             cmap: Colormap name.
+            color_scale_percent: Optional tuple (min_percent, max_percent) for color scale.
             font_size: Font size.
             
         Returns:
@@ -994,27 +1133,28 @@ class VisualisationMetadata:
             df, year_col, property_col, total_per_year, top_n
         )
 
-        vmax = max(pivot_entity.values.max(), pivot_property.values.max())
+        vmax_data = max(pivot_entity.values.max(), pivot_property.values.max())
+        vmin, vmax = self._resolve_color_scale_percent(color_scale_percent, vmax_data)
 
         # Create figure
         fig, axes = plt.subplots(1, 2, figsize=figsize,
                                   gridspec_kw={'width_ratios': [1, 1], 'wspace': 0.35})
 
         # Plot heatmaps
-        sns.heatmap(pivot_entity, ax=axes[0], cmap=cmap, vmin=0, vmax=vmax,
+        sns.heatmap(pivot_entity, ax=axes[0], cmap=cmap, vmin=vmin, vmax=vmax,
                    cbar=False, linewidths=0.5)
         axes[0].set_title("c", loc='left', fontweight='bold')
         axes[0].set_xlabel("Publication Year")
         axes[0].set_ylabel("Entity")
 
-        sns.heatmap(pivot_property, ax=axes[1], cmap=cmap, vmin=0, vmax=vmax,
+        sns.heatmap(pivot_property, ax=axes[1], cmap=cmap, vmin=vmin, vmax=vmax,
                    cbar=False, linewidths=0.5)
         axes[1].set_title("d", loc='left', fontweight='bold')
         axes[1].set_xlabel("Publication Year")
         axes[1].set_ylabel("Property")
 
         # Add colorbar
-        sm = ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=0, vmax=vmax))
+        sm = ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=vmin, vmax=vmax))
         sm.set_array([])
         cbar = fig.colorbar(sm, ax=axes, fraction=0.05, pad=0.02)
         cbar.set_label('Share of Papers [%]')

@@ -48,25 +48,48 @@ pip install -e .
 
 ## Run the Streamlit Dashboard
 
-### Run locally
+### Quick start (for first-time users)
 
-From the project root:
+1. Create and activate the environment (see "Setup").
+2. Create a `.env` file in the project root and add a password:
+
+```bash
+STREAMLIT_APP_PASSWORD=your_secure_password
+```
+
+3. Start the dashboard locally:
 
 ```bash
 streamlit run streamlit/streamlit_app.py
 ```
 
-Open in your browser:
+4. Open `http://127.0.0.1:8501` in your browser and enter the password when prompted.
 
-- `http://127.0.0.1:8501`
-
-### Run for network access
+To make the dashboard reachable on your local network, run:
 
 ```bash
 streamlit run streamlit/streamlit_app.py --server.address 0.0.0.0 --server.port 8501
 ```
+Then open `http://<host-ip>:8501` from another device on the same network.
 
-Then open it via the host IP, for example `http://<your-ip>:8501`.
+### How to use the dashboard (first-time walkthrough)
+
+- Login with the password from step 2. The app blocks further access until authenticated.
+- Left column: three tabs to define data mappings:
+  - `Entity`: create classes (labels) and add keywords that identify matching records.
+  - `Property`: create property classes; optionally set `Unit` and `Year` for conversions/plots.
+  - `Metadata`: facet-based filters (author origin, publication year, temporal & spatial scope).
+- After defining mappings and filters, use the main tabs to inspect results:
+  - `Data`: paginated table with download/export options.
+  - `Column Frequency`: frequency counts across mappings.
+  - `Temporal Plot` / `Spatial Plot`: visual summaries.
+
+Tips:
+- Use short, descriptive class labels and multiple keywords to increase match coverage.
+- Use `!` or the "Exclude Keywords" field to prevent unwanted matches.
+- If a filter makes the dataset empty, check the available facets in the Filters expander.
+
+If you need more detail on the data pipeline or notebooks, see the `notebooks/` folder.
 
 ## Run the Notebooks
 

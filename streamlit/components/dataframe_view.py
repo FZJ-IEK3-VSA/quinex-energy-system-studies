@@ -140,25 +140,37 @@ def render(df, rows_per_page):
     if "References" in df.columns:
         df["References"] = df["References"].apply(format_references_column)
 
+    # Build desired columns: place mapping columns directly after the raw columns
     desired_columns = [
         "DOI",
         "Publication Year",
         "Author Origin",
-        "Entity",
-        "Property",
-        "Quantity",
-        "Value Normalized",
-        "Unit Normalized",
+    ]
+
+    # Entity + its mapping
+    desired_columns.append("Entity")
+    desired_columns.append("Entity Mapping")
+
+    # Property + its mapping
+    desired_columns.append("Property")
+    desired_columns.append("Property Mapping")
+
+    # Quantity, Value Normalized + Value Converted
+    desired_columns.append("Quantity")
+    desired_columns.append("Value Normalized")
+    desired_columns.append("Value Converted")
+
+    # Unit Normalized + Unit Mapping
+    desired_columns.append("Unit Normalized")
+    desired_columns.append("Unit Mapping")
+
+    # Remaining contextual columns
+    desired_columns.extend([
         "Quote",
         "Temporal Scope",
         "Spatial Scope",
         "References",
-        "Classification",
-        "Entity Mapping",
-        "Property Mapping",
-        "Unit Mapping",
-        "Value Converted"
-    ]
+    ])
 
     # nur die existierenden Spalten auswählen (vermeidet Fehler, falls eine fehlt)
     df = df[[col for col in desired_columns if col in df.columns]]

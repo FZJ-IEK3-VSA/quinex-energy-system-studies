@@ -1,9 +1,11 @@
 import sys
 import os
 import io
+import re
 import string
 import math
 import streamlit as st
+import streamlit.components.v1 as components
 from utils import duckdb_filter, unit_filter
 
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__)))
@@ -50,6 +52,45 @@ def _format_property_label(prop_name, raw_unit):
     if unit:
         return f"{prop_name} [{unit}]"
     return str(prop_name)
+
+
+def _extract_svg_height(svg_data, fallback_height=900):
+    match = re.search(r'<svg[^>]*height="([0-9.]+)([a-zA-Z]+)?"', str(svg_data))
+    if not match:
+        return fallback_height
+
+    height_value = float(match.group(1))
+    unit = (match.group(2) or "px").lower()
+    if unit == "pt":
+        return int(height_value * 1.333)
+    if unit == "in":
+        return int(height_value * 96)
+    return int(height_value)
+
+
+def _strip_svg_prolog(svg_data):
+    svg_text = str(svg_data)
+    svg_start = svg_text.find("<svg")
+    if svg_start >= 0:
+        return svg_text[svg_start:]
+    return svg_text
+
+
+def _render_scrollable_svg(svg_data, container_id):
+    safe_container_id = "".join(
+        ch if ch.isalnum() or ch in "-_" else "-" for ch in str(container_id)
+    )
+    svg_markup = _strip_svg_prolog(svg_data)
+    iframe_height = _extract_svg_height(svg_markup) + 40
+    components.html(
+        f"""
+        <div id="{safe_container_id}" style="width: 100%; overflow-x: auto; overflow-y: hidden; padding-bottom: 0.25rem;">
+            <div style="display: inline-block; min-width: max-content;">{svg_markup}</div>
+        </div>
+        """,
+        height=iframe_height,
+        scrolling=False,
+    )
 
 
 def prepare_df(regex_filters, regex_mapping):
@@ -211,7 +252,7 @@ def render_temporal(regex_filters, regex_mapping):
     # Always render from session_state if available
     if 'temporal_plot_svg' in st.session_state:
         with st.expander("📊 Plot", expanded=True):
-            st.write(st.session_state['temporal_plot_svg'], unsafe_allow_html=True)
+            _render_scrollable_svg(st.session_state['temporal_plot_svg'], "temporal-plot-scroll")
 
             st.download_button(
                 "Download Plot as PDF",
@@ -363,7 +404,7 @@ def render_spatial(regex_filters, regex_mapping):
             tabs = st.tabs(tab_labels)
             for tab, (label, svg_data, pdf_data) in zip(tabs, spatial_plots):
                 with tab:
-                    st.write(svg_data, unsafe_allow_html=True)
+                    _render_scrollable_svg(svg_data, f"spatial-plot-scroll-{label}")
 
                     st.download_button(
                         f"Download {label} (PDF)",

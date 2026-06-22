@@ -1,5 +1,7 @@
+import re
 import streamlit as st
 import plotly.express as px
+from components.dataframe_view import parse_unit_column, format_unit_list
 from utils import duckdb_filter
 
 ALLOWED_COLUMNS = [
@@ -106,13 +108,71 @@ def _is_exclusion_keyword(token: str) -> bool:
     return _normalize_exclusion_token(token) is not None
 
 
+def _parse_unit_items_from_duckdb_string(raw: str):
+    """Parse DuckDB struct-list string representations for unit formatting."""
+    if not isinstance(raw, str):
+        return []
+
+    blocks = re.findall(r"\{[^{}]*\}", raw)
+    if not blocks:
+        return []
+
+    items = []
+    for block in blocks:
+        text_match = re.search(
+            r"(?:['\"]?text['\"]?\s*[:=]\s*)(\"[^\"]*\"|'[^']*'|[^,}\]]+)",
+            block,
+            flags=re.IGNORECASE,
+        )
+        if not text_match:
+            continue
+
+        text_token = text_match.group(1).strip().strip("\"'")
+        if not text_token or text_token.lower() in {"none", "null"}:
+            continue
+
+        exponent = 1
+        exponent_match = re.search(
+            r"(?:['\"]?exponent['\"]?\s*[:=]\s*)(\"[^\"]*\"|'[^']*'|[^,}\]]+)",
+            block,
+            flags=re.IGNORECASE,
+        )
+        if exponent_match:
+            exp_token = exponent_match.group(1).strip().strip("\"'")
+            if exp_token and exp_token.lower() not in {"none", "null"}:
+                try:
+                    exponent = float(exp_token)
+                except (TypeError, ValueError):
+                    exponent = exp_token
+
+        items.append({"text": text_token, "exponent": exponent})
+
+    return items
+
+
+def _format_unit_for_frequency(value):
+    """Match Unit Normalized formatting used in the Data tab."""
+    parsed = parse_unit_column(value)
+    if parsed is not None:
+        formatted = format_unit_list(parsed).strip()
+        return formatted if formatted else None
+
+    if isinstance(value, str):
+        fallback_items = _parse_unit_items_from_duckdb_string(value)
+        if fallback_items:
+            formatted = format_unit_list(fallback_items).strip()
+            return formatted if formatted else None
+
+    return None
+
+
 def _value_counts_from_dataframe(df, selected_col, top_n):
     if selected_col not in df.columns:
         return None
 
     series = df[selected_col]
     if selected_col == "Unit Normalized":
-        series = series.astype(str)
+        series = series.apply(_format_unit_for_frequency)
 
     counts = (
         series.dropna()
@@ -127,7 +187,7 @@ def _value_counts_from_dataframe(df, selected_col, top_n):
 
 def render(regex_filters, regex_mapping=None, filtered_df_all=None):
     st.markdown("#### Column Frequency Analysis")
-    st.caption("Select a column to see the most frequent values.")
+    st.caption("Select a column to see it most frequent values.")
 
     # --- Mapping-Filter ---
     if regex_mapping is None:
@@ -194,6 +254,17 @@ def render(regex_filters, regex_mapping=None, filtered_df_all=None):
                 return
         else:
             df_counts = duckdb_filter.get_value_counts(selected_col, regex_filters=active_filters, top_n=top_n)
+
+        if selected_col == "Unit Normalized" and not df_counts.empty and "value" in df_counts.columns:
+            df_counts = df_counts.copy()
+            df_counts["value"] = df_counts["value"].apply(_format_unit_for_frequency)
+            df_counts = (
+                df_counts.dropna(subset=["value"])
+                .groupby("value", as_index=False)["count"]
+                .sum()
+                .sort_values("count", ascending=False)
+                .head(top_n)
+            )
 
         if df_counts.empty:
             st.info("No data available for this column.")

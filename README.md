@@ -65,31 +65,42 @@ streamlit run streamlit/streamlit_app.py
 
 4. Open `http://127.0.0.1:8501` in your browser and enter the password when prompted.
 
-To make the dashboard reachable on your local network, run:
+### Run as a systemd service
+
+To run the dashboard as a persistent systemd service on a Linux VM:
+
+1. Deploy the service file:
 
 ```bash
-streamlit run streamlit/streamlit_app.py --server.address 0.0.0.0 --server.port 8501
+sudo cp streamlit/deployment/dashboard.service /etc/systemd/system/
+sudo systemctl daemon-reload
 ```
-Then open `http://<host-ip>:8501` from another device on the same network.
 
-### How to use the dashboard (first-time walkthrough)
+2. Start the service:
 
-- Login with the password from step 2. The app blocks further access until authenticated.
-- Left column: three tabs to define data mappings:
-  - `Entity`: create classes (labels) and add keywords that identify matching records.
-  - `Property`: create property classes; optionally set `Unit` and `Year` for conversions/plots.
-  - `Metadata`: facet-based filters (author origin, publication year, temporal & spatial scope).
-- After defining mappings and filters, use the main tabs to inspect results:
-  - `Data`: paginated table with download/export options.
-  - `Column Frequency`: frequency counts across mappings.
-  - `Temporal Plot` / `Spatial Plot`: visual summaries.
+```bash
+sudo systemctl start dashboard.service
+```
 
-Tips:
-- Use short, descriptive class labels and multiple keywords to increase match coverage.
-- Use `!` or the "Exclude Keywords" field to prevent unwanted matches.
-- If a filter makes the dataset empty, check the available facets in the Filters expander.
+3. Enable auto-start on boot (optional):
 
-If you need more detail on the data pipeline or notebooks, see the `notebooks/` folder.
+```bash
+sudo systemctl enable dashboard.service
+```
+
+4. Check service status:
+
+```bash
+sudo systemctl status dashboard.service
+```
+
+5. View logs:
+
+```bash
+tail -f streamlit.log
+```
+
+The service will be available at `http://<host-ip>:5001`.
 
 ## Run the Notebooks
 
@@ -105,10 +116,3 @@ Recommended order:
 5. `Step4_MetadataVisualisation.ipynb`
 6. `Step5_TemporalVisualisation.ipynb`
 7. `Step6_SpatialVisualisation.ipynb`
-
-## Troubleshooting
-
-- Port 8501 already in use:
-  `streamlit run streamlit/streamlit_app.py --server.port 8502`
-- Empty or missing data in the dashboard:
-  check whether `streamlit/duckdb_data/data.duckdb` exists.

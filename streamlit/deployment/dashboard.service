@@ -1,0 +1,17 @@
+[Unit]
+Description=Streamlit Dashboard
+After=network.target
+
+[Service]
+Type=simple
+
+User=centos
+WorkingDirectory=/home/centos/quenix_application
+
+ExecStart=/bin/bash -lc 'exec /home/centos/miniforge3/envs/quinex_application_env/bin/streamlit run streamlit/streamlit_app.py --server.address 0.0.0.0 --server.port 5001 >> /home/centos/quenix_application/streamlit.log 2>&1'
+
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

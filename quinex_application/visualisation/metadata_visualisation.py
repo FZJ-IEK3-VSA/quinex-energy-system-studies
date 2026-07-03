@@ -47,7 +47,6 @@ class VisualisationMetadata:
         """
         self.df_path = df_path
         self._population_cache = None
-        self._gdp_cache = None
 
         pd.set_option('display.max_colwidth', None)
         setup_plotting_environment()
@@ -118,77 +117,8 @@ class VisualisationMetadata:
         df_pop['year'] = df_pop['year'].astype(int)
         
         return df_pop
-
-    def _load_gdp_data(self, gdp_excel_path: str) -> pd.DataFrame:
-        """
-        Load World Bank GDP data from local Excel file.
-        
-        Args:
-            gdp_excel_path: Path to the World Bank GDP Excel file.
-            
-        Returns:
-            DataFrame with GDP data by country and year.
-        """
-        if self._gdp_cache is not None:
-            return self._gdp_cache
-        
-        print(f"Loading World Bank GDP data from {gdp_excel_path}...")
-        
-        df_gdp = self._read_gdp_excel(gdp_excel_path)
-        df_gdp = self._process_gdp_data(df_gdp)
-        
-        self._gdp_cache = df_gdp
-        print(f"Loaded GDP data for {df_gdp['countries'].nunique()} countries, "
-              f"years {df_gdp['year'].min()}-{df_gdp['year'].max()}")
-        
-        return df_gdp
-
-    def _read_gdp_excel(self, path: str) -> pd.DataFrame:
-        """Read GDP data from Excel file."""
-        return pd.read_excel(path, header=3)
-
-    def _process_gdp_data(self, df_gdp: pd.DataFrame) -> pd.DataFrame:
-        """Process raw GDP data into standardized format."""
-        year_columns = self._extract_year_columns(df_gdp)
-        
-        df_gdp = df_gdp.melt(
-            id_vars=['Country Name', 'Country Code'],
-            value_vars=year_columns,
-            var_name='year',
-            value_name='gdp'
-        )
-        
-        df_gdp['countries'] = df_gdp['Country Code'].map(self.ISO3_TO_ISO2)
-        df_gdp = df_gdp[df_gdp['countries'].notna()].copy()
-        df_gdp = df_gdp[df_gdp['gdp'].notna()].copy()
-        df_gdp['year'] = pd.to_numeric(df_gdp['year'], errors='coerce').astype(int)
-        
-        # Calculate world GDP and shares
-        world_gdp = df_gdp.groupby('year')['gdp'].sum().reset_index()
-        world_gdp.columns = ['year', 'world_gdp']
-        
-        df_gdp = df_gdp.merge(world_gdp, on='year', how='left')
-        df_gdp['gdp_share'] = df_gdp['gdp'] / df_gdp['world_gdp']
-        
-        return df_gdp[['countries', 'year', 'gdp', 'world_gdp', 'gdp_share']]
-
-    def _extract_year_columns(self, df: pd.DataFrame) -> list:
-        """Extract year columns from GDP DataFrame."""
-        year_columns = []
-        skip_cols = ['Country Name', 'Country Code', 'Indicator Name', 'Indicator Code']
-        
-        for col in df.columns:
-            if col in skip_cols:
-                continue
-            try:
-                year = int(float(col))
-                if year >= 1960:
-                    year_columns.append(col)
-            except (ValueError, TypeError):
-                continue
-        
-        return year_columns
-
+    
+    
     # =========================================================================
     # Country Share Analysis
     # =========================================================================
@@ -205,8 +135,6 @@ class VisualisationMetadata:
         legend_bbox: tuple = None,
         normalize_by_population: bool = False,
         population_excel_path: str = None,
-        normalize_by_gdp: bool = False,
-        gdp_excel_path: str = None,
         max_year: int = None,
         country_groups: dict = None,
         add_regression_lines: bool = True,
@@ -227,8 +155,6 @@ class VisualisationMetadata:
             legend_bbox: Legend bounding box.
             normalize_by_population: Normalize by population share.
             population_excel_path: Path to population Excel file.
-            normalize_by_gdp: Normalize by GDP share.
-            gdp_excel_path: Path to GDP Excel file.
             max_year: Maximum year to include.
             country_groups: Dict mapping group names to country code lists.
             add_regression_lines: Draw log-linear trend lines per country in plot a.
@@ -241,9 +167,7 @@ class VisualisationMetadata:
         # Validate inputs
         self._validate_normalization_params(
             normalize_by_population, 
-            normalize_by_gdp,
-            population_excel_path,
-            gdp_excel_path
+            population_excel_path
         )
         
         set_font_sizes(font_size)
@@ -251,9 +175,7 @@ class VisualisationMetadata:
         # Load normalization data if needed
         norm_df, norm_share_col = self._get_normalization_data(
             normalize_by_population,
-            normalize_by_gdp,
-            population_excel_path,
-            gdp_excel_path
+            population_excel_path
         )
 
         # Prepare data
@@ -271,25 +193,25 @@ class VisualisationMetadata:
         # Apply normalization if needed
         plot_column = self._apply_normalization(
             counts_year, norm_df, norm_share_col,
-            normalize_by_population or normalize_by_gdp
+            normalize_by_population
         )
 
         # Prepare plot data
         pivot_share_year = self._prepare_line_plot_data(
             counts_year, top_countries_line, plot_column, country_groups,
-            normalize_by_population or normalize_by_gdp, norm_share_col, norm_df
+            normalize_by_population, norm_share_col, norm_df
         )
         
         scatter_data = self._prepare_scatter_data(
             df_clean, counts_year, top_countries_scatter, country_groups,
-            normalize_by_population or normalize_by_gdp, norm_share_col, norm_df
+            normalize_by_population, norm_share_col, norm_df
         )
 
         # Create plots
         fig = self._create_country_share_figure(
             pivot_share_year, scatter_data, top_countries_line,
             figsize, color_map, legend_loc, legend_bbox,
-            normalize_by_population, normalize_by_gdp, country_groups,
+            normalize_by_population, country_groups,
             add_regression_lines, regression_start_year, regression_end_year
         )
 
@@ -298,30 +220,20 @@ class VisualisationMetadata:
     def _validate_normalization_params(
         self,
         normalize_by_population: bool,
-        normalize_by_gdp: bool,
         population_path: str,
-        gdp_path: str
     ):
         """Validate normalization parameters."""
-        if normalize_by_population and normalize_by_gdp:
-            raise ValueError("Cannot use both population and GDP normalization.")
         if normalize_by_population and population_path is None:
             raise ValueError("population_excel_path required for population normalization.")
-        if normalize_by_gdp and gdp_path is None:
-            raise ValueError("gdp_excel_path required for GDP normalization.")
 
     def _get_normalization_data(
         self,
         normalize_by_population: bool,
-        normalize_by_gdp: bool,
         population_path: str,
-        gdp_path: str
     ) -> tuple:
         """Load normalization data if needed."""
         if normalize_by_population:
             return self._load_population_data(population_path), 'population_share'
-        elif normalize_by_gdp:
-            return self._load_gdp_data(gdp_path), 'gdp_share'
         return None, None
 
     def _filter_by_max_year(self, df: pd.DataFrame, max_year: int) -> pd.DataFrame:
@@ -629,7 +541,6 @@ class VisualisationMetadata:
         legend_loc: str,
         legend_bbox: tuple,
         normalize_by_population: bool,
-        normalize_by_gdp: bool,
         country_groups: dict,
         add_regression_lines: bool,
         regression_start_year: int,
@@ -637,7 +548,7 @@ class VisualisationMetadata:
     ):
         """Create the country share figure with line and scatter plots."""
         fig, axes = plt.subplots(1, 2, figsize=figsize)
-        normalize = normalize_by_population or normalize_by_gdp
+        normalize = normalize_by_population
 
         # Line plot
         self._plot_country_lines(
@@ -645,7 +556,7 @@ class VisualisationMetadata:
             add_regression_lines, regression_start_year, regression_end_year
         )
         self._style_line_plot(
-            axes[0], normalize_by_population, normalize_by_gdp, add_regression_lines
+            axes[0], normalize_by_population, add_regression_lines
         )
 
         # Scatter plot
@@ -653,7 +564,7 @@ class VisualisationMetadata:
             axes[1], scatter_data, top_countries, color_map, 
             normalize, country_groups
         )
-        self._style_scatter_plot(axes[1], normalize_by_population, normalize_by_gdp)
+        self._style_scatter_plot(axes[1], normalize_by_population)
 
         # Legend
         self._add_country_legend(fig, axes[0], legend_loc, legend_bbox)
@@ -745,7 +656,6 @@ class VisualisationMetadata:
         self,
         ax,
         normalize_by_population: bool,
-        normalize_by_gdp: bool,
         add_regression_lines: bool
     ):
         """Style the line plot axis."""
@@ -754,8 +664,6 @@ class VisualisationMetadata:
         
         if normalize_by_population:
             ax.set_ylabel("Population-relative\npublications")
-        elif normalize_by_gdp:
-            ax.set_ylabel("GDP-relative\npublications")
         else:
             ax.set_ylabel("Share of Papers [%]")
 
@@ -801,14 +709,12 @@ class VisualisationMetadata:
             x_val = row['share_of_paper'] if normalize else row['share_of_paper'] * 100
             ax.scatter(x_val, row['average_sjr'], s=100, label=label, color=color)
 
-    def _style_scatter_plot(self, ax, normalize_by_population: bool, normalize_by_gdp: bool):
+    def _style_scatter_plot(self, ax, normalize_by_population: bool):
         """Style the scatter plot axis."""
         ax.set_title("b", loc='left', fontweight='bold')
         
         if normalize_by_population:
             ax.set_xlabel("Population-relative publications")
-        elif normalize_by_gdp:
-            ax.set_xlabel("GDP-relative publications")
         else:
             ax.set_xlabel("Share of Papers [%]")
         

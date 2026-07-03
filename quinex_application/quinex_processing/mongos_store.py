@@ -207,6 +207,7 @@ class MongoStore:
 
             try:
                 response = self.quinex.get_analysis(name, openalex_id)
+                print(response)
                 if response:
                     response = self.convert_large_ints(response)
                     self.collection.update_one(

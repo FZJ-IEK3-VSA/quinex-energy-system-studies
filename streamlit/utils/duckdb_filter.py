@@ -10,6 +10,7 @@ import streamlit as st
 from quinex_utils.parsers.unit_parser import FastSymbolicUnitParser
 
 VALUE_EFFECTIVE_COLUMN = "Value Effective"
+UNIT_DIMENSION_COLUMNS = ("Unit Dimension", "unit_dimension")
 
 # Monkeypatch open innerhalb quinex_utils, um UTF-8 zu erzwingen
 _open = builtins.open
@@ -123,6 +124,15 @@ def build_where_clause(regex_filters=None):
         return ""
 
     clauses = []
+    available_columns = set(get_columns())
+
+    def _resolve_unit_dimension_column_name():
+        for candidate in UNIT_DIMENSION_COLUMNS:
+            if candidate in available_columns:
+                return candidate
+        return UNIT_DIMENSION_COLUMNS[0]
+
+    unit_dimension_column = _resolve_unit_dimension_column_name()
 
     author_origin_values = regex_filters.get("__author_origin_values", [])
     publication_year_range = regex_filters.get("__publication_year_range")
@@ -137,12 +147,14 @@ def build_where_clause(regex_filters=None):
         if not patterns:
             continue
 
-        if col == "unit_dimension":
+        if col == "__unit_dimension":
             # exakte Dimension — kein Regex
-            dim_clauses = [f"unit_dimension = '{_sql_quote(d)}'" for d in patterns]
+            dim_clauses = [
+                f"\"{unit_dimension_column}\" = '{_sql_quote(d)}'" for d in patterns
+            ]
             unit_clauses = list(dim_clauses)
             if include_unitless:
-                unit_clauses.append(_build_unitless_dimension_clause())
+                unit_clauses.append(_build_unitless_dimension_clause(unit_dimension_column))
             clauses.append("(" + " OR ".join(unit_clauses) + ")")
         elif col in {"Entity", "Property"}:
             class_groups = regex_filters.get(f"__{col.lower()}_groups", [])
@@ -162,8 +174,8 @@ def build_where_clause(regex_filters=None):
             combined = "|".join(transformed)
             clauses.append(f"{col} ~ '{_sql_quote(combined)}'")
 
-    if include_unitless and "unit_dimension" not in regex_filters:
-        clauses.append(_build_unitless_dimension_clause())
+    if include_unitless and "__unit_dimension" not in regex_filters:
+        clauses.append(_build_unitless_dimension_clause(unit_dimension_column))
 
     if author_origin_values:
         author_clause = _build_contains_any_clause("Author Origin", author_origin_values)
@@ -293,7 +305,7 @@ def flatten_regex_filters(mapping_dict):
                 dim_list.append(dim)
 
         if dim_list:
-            flat["unit_dimension"] = dim_list
+            flat["__unit_dimension"] = dim_list
         if has_unitless_filter:
             flat["__include_unitless"] = True
 
@@ -459,16 +471,16 @@ def _is_unitless_alias(unit_str):
     return str(unit_str).strip().lower() in UNITLESS_ALIASES
 
 
-def _build_unitless_dimension_clause():
+def _build_unitless_dimension_clause(unit_dimension_column):
     # Unterstützt leere/fehlende unit_dimension sowie typische
     # dimensionslose Vektor-Repräsentationen wie [0, 0, ...] oder (0, 0, ...).
     return (
-        "(unit_dimension IS NULL "
-        "OR TRIM(CAST(unit_dimension AS VARCHAR)) = '' "
-        "OR TRIM(CAST(unit_dimension AS VARCHAR)) = '[]' "
-        "OR LOWER(TRIM(CAST(unit_dimension AS VARCHAR))) = 'dimensionless' "
-        "OR regexp_matches(CAST(unit_dimension AS VARCHAR), '^\\s*\\[\\s*0(?:\\.0+)?(?:\\s*,\\s*0(?:\\.0+)?)*\\s*\\]\\s*$') "
-        "OR regexp_matches(CAST(unit_dimension AS VARCHAR), '^\\s*\\(\\s*0(?:\\.0+)?(?:\\s*,\\s*0(?:\\.0+)?)*\\s*\\)\\s*$'))"
+        f"(\"{unit_dimension_column}\" IS NULL "
+        f"OR TRIM(CAST(\"{unit_dimension_column}\" AS VARCHAR)) = '' "
+        f"OR TRIM(CAST(\"{unit_dimension_column}\" AS VARCHAR)) = '[]' "
+        f"OR LOWER(TRIM(CAST(\"{unit_dimension_column}\" AS VARCHAR))) = 'dimensionless' "
+        f"OR regexp_matches(CAST(\"{unit_dimension_column}\" AS VARCHAR), '^\\s*\\[\\s*0(?:\\.0+)?(?:\\s*,\\s*0(?:\\.0+)?)*\\s*\\]\\s*$') "
+        f"OR regexp_matches(CAST(\"{unit_dimension_column}\" AS VARCHAR), '^\\s*\\(\\s*0(?:\\.0+)?(?:\\s*,\\s*0(?:\\.0+)?)*\\s*\\)\\s*$'))"
     )
 
 

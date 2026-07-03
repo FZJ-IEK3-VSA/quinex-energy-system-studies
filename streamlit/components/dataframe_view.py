@@ -137,12 +137,13 @@ def render(df, rows_per_page):
 
     if "Author Origin" in df.columns:
         df["Author Origin"] = df["Author Origin"].apply(format_list_column)
-    if "References" in df.columns:
-        df["References"] = df["References"].apply(format_references_column)
+    if "Reference" in df.columns:
+        df["Reference"] = df["Reference"].apply(format_references_column)
 
     # Build desired columns: place mapping columns directly after the raw columns
     desired_columns = [
         "DOI",
+        "Source",
         "Publication Year",
         "Author Origin",
     ]
@@ -169,7 +170,9 @@ def render(df, rows_per_page):
         "Quote",
         "Temporal Scope",
         "Spatial Scope",
-        "References",
+        "Reference",
+        "Method",
+        "Qualifier",
     ])
 
     # nur die existierenden Spalten auswählen (vermeidet Fehler, falls eine fehlt)

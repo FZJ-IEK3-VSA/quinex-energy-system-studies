@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import threading
 import logging
+from numbers import Integral
 from quinex_utils.parsers.quantity_parser import FastSymbolicQuantityParser
 from quinex_utils.parsers.unit_parser import FastSymbolicUnitParser
 
@@ -49,6 +50,9 @@ class QuinexPostprocessing():
         pd.set_option('display.float_format', lambda x: f'{x:.10g}' if x != 0 else '0.0')
         self.quantity_parser = FastSymbolicQuantityParser()
         self.unit_parser = FastSymbolicUnitParser()
+        self._unavailable_full_text_markers = [
+            "due to copyright restrictions, the full text of this paper is not available"
+        ]
 
     # ----------------------------------- Functions for Saving Analysis-----------------------------------------------------------
 
@@ -76,7 +80,25 @@ class QuinexPostprocessing():
                 continue
 
             self.text = result.get("text")
+
+            openalex_about_source = result.get("metadata", {}).get("provenance", {}).get("fulltext_source", {}).get("openalex_about_source", {})
+            self.oa = openalex_about_source.get("is_oa", False) if openalex_about_source else False
+
+            self.licence_information = result.get("metadata", {}).get("provenance", {}).get("fulltext_source", {}).get("license_from_source", pd.NA)
             
+            metadata = result.get("metadata") or {}
+            bibliographic = metadata.get("bibliographic") or {}
+            authorships = bibliographic.get("authorships") or []
+
+            first_author = next(
+                (a for a in authorships if a.get("author_position") == "first"),
+                authorships[0] if authorships else None,
+            )
+            self.author = (
+                first_author.get("author", {}).get("display_name", pd.NA)
+                if first_author else pd.NA
+            )
+
             self.year = year_lookup.get(self.doi)
             self.source_url = result.get("metadata", {}).get("provenance", {}).get("fulltext_source", {}).get("url", pd.NA)
        
@@ -98,23 +120,37 @@ class QuinexPostprocessing():
         claim = self.stm.get("claim", {})
         qualifiers = self.stm.get("qualifiers", {})
         statement_classification = self.stm.get("statement_classification", {})
+        full_text_length = len(self.text) if self._has_available_text(self.text) else 0
 
 
-        entity = claim.get("entity", {}).get("text", "")
-        prop = claim.get("property", {}).get("text", "")
+        entity = claim.get("entity", {})
+        prop = claim.get("property", {})
 
-        temporal_scope = qualifiers.get("temporal_scope", {}).get("normalized", {'year': None})
+        temporal_scope_raw = qualifiers.get("temporal_scope", {}) or {}
+        temporal_scope = temporal_scope_raw.get("normalized", {'year': None})
         temporal = {
             "year": temporal_scope.get("year", pd.NA)
             } if temporal_scope.get("year", pd.NA) else pd.NA
+        _, temporal_position = self._extract_text_and_position(temporal_scope_raw)
 
-        spatial_scope = qualifiers.get("spatial_scope", {}).get("normalized", {'country': None, 'country_code': None, 'latitude': None, 'longitude': None, 'osm_place_id': None})
+        spatial_scope_raw = qualifiers.get("spatial_scope", {}) or {}
+        spatial_scope = spatial_scope_raw.get("normalized", {'country': None, 'country_code': None, 'latitude': None, 'longitude': None, 'osm_place_id': None})
         spatial = {
-            "text": qualifiers.get("spatial_scope", {}).get("text", pd.NA),
+            "text": spatial_scope_raw.get("text", pd.NA),
             "country": spatial_scope.get("country", pd.NA), 
             "latitude": spatial_scope.get("latitude", pd.NA), 
             "longitude": spatial_scope.get("longitude", pd.NA)
             } if spatial_scope.get("latitude", pd.NA) and spatial_scope.get("longitude", pd.NA)  else pd.NA
+        _, spatial_position = self._extract_text_and_position(spatial_scope_raw)
+
+        method_raw = qualifiers.get("method", {}) or {}
+        method_text, method_position = self._extract_text_and_position(method_raw)
+
+        qualifier_raw = qualifiers.get("qualifier", {}) or {}
+        qualifier_text, qualifier_position = self._extract_text_and_position(qualifier_raw)
+
+        reference_raw = qualifiers.get("reference", {}) or {}
+        reference_text, reference_position = self._extract_text_and_position(reference_raw)
         
         classification = {
             "type": statement_classification.get("type", {}).get("class", pd.NA),
@@ -123,8 +159,8 @@ class QuinexPostprocessing():
         }
 
         quantity_modifier = [q["value"]["normalized"]["modifiers"] for q in claim.get("quantity", {}).get("normalized", {}).get("individual_quantities", {}).get("normalized", [])]
-        quantity = claim.get("quantity", {}).get("text", "")
-        combined_quantity = f'{", ".join(set(quantity_modifier))} {quantity}'.strip()
+        quantity = claim.get("quantity", {})
+        combined_quantity = f'{", ".join(set(quantity_modifier))} {quantity.get("text", "")}'.strip()
         quantity_type = claim.get("quantity", {}).get("normalized", {}).get("type", {}).get("class", "")
 
         quantity_normalized = claim.get("quantity", {}).get("normalized", {}).get("individual_quantities", {}).get("normalized", [])
@@ -169,48 +205,82 @@ class QuinexPostprocessing():
         #     )
         # ])) or units[0]["unit_uri"]
 
-        text_quote = self.get_quote()
-
-        ref_normalized = qualifiers.get("reference", {}).get("normalized", []) or []
-        references = [
-            {"title": bib.get("title") or "", "venue": bib.get("venue") or ""}
-            for ref_entry in ref_normalized
-            for bib in (ref_entry.get("bib_entries") or [])
-            if bib is not None
-        ] or None
+        quote_info = self.get_quote_info(full_text_length)
+        text_quote = quote_info["quote"]
 
         records.append({
             "publication_year": self.year,
             "DOI": self.doi,
+            "author": self.author,
+            "source_url": self.source_url,
+            "open_access": self.oa,
+            "license_information": self.licence_information,
+            "full_text_length": full_text_length,
             "classification": classification,
-            "entity": entity,
-            "property": prop,
+            "entity": entity.get("text", ""),
+            "entity_position": (entity.get("start"), entity.get("end")) if not entity.get("is_implicit", True) else None,
+            "property": prop.get("text", ""),
+            "property_position": (prop.get("start"), prop.get("end")) if not prop.get("is_implicit", True) else None,
             "quantity_text": combined_quantity,
+            "quantity_position": (quantity.get("start"), quantity.get("end")) if not quantity.get("is_implicit", True) else None,
             "value_normalized": value,
             "unit_normalized": unit,
             "quantity_normalized": quantity_normalized,
             "quote": text_quote,
+            "quote_position": quote_info["quote_position"],
             "temporal_scope": temporal,
+            "temporal_scope_position": temporal_position,
             "spatial_scope": spatial,
-            "references": references,
-            "source_url": self.source_url,
+            "spatial_scope_position": spatial_position,
+            "method": method_text,
+            "method_position": method_position,
+            "qualifier": qualifier_text,
+            "qualifier_position": qualifier_position,
+            "reference": reference_text,
+            "reference_position": reference_position,
         })
         return records
     
     def get_quote(self):
-        if not self.text:
-            return pd.NA
+        return self.get_quote_info().get("quote", pd.NA)
+
+    def _has_available_text(self, text):
+        """Return True if a usable full text is present (not empty and not copyright placeholder)."""
+        if not isinstance(text, str):
+            return False
+
+        text_norm = text.strip()
+        if not text_norm:
+            return False
+
+        lowered = text_norm.lower()
+        return not any(marker in lowered for marker in self._unavailable_full_text_markers)
+
+    def get_quote_info(self, full_text_length=None):
+        if not self._has_available_text(self.text):
+            return {
+                "quote": pd.NA,
+                "quote_position": None,
+            }
+
+        if full_text_length is None:
+            full_text_length = len(self.text)
 
         entity = self.stm.get("claim", {}).get("entity", {})
         prop = self.stm.get("claim", {}).get("property", {})
         quantity = self.stm.get("claim", {}).get("quantity", {})
 
-        entity_char_offsets = [] if entity["is_implicit"] else [entity["start"], entity["end"]]
-        property_char_offsets = [] if prop["is_implicit"] else [prop["start"], prop["end"]]
-        quantity_char_offsets = [quantity["start"], quantity["end"]]
+        entity_char_offsets = [] if entity.get("is_implicit", True) else [entity.get("start"), entity.get("end")]
+        property_char_offsets = [] if prop.get("is_implicit", True) else [prop.get("start"), prop.get("end")]
+        quantity_char_offsets = [] if quantity.get("is_implicit", False) else [quantity.get("start"), quantity.get("end")]
 
-        offsets = entity_char_offsets + property_char_offsets + quantity_char_offsets
-
+        offsets = [o for o in (entity_char_offsets + property_char_offsets + quantity_char_offsets) if isinstance(o, Integral)]
+        if not offsets:
+            return {
+                "quote": pd.NA,
+                "quote_position": None,
+            }
+        
         min_sorted_offsets = min(offsets)
         max_sorted_offsets = max(offsets)
         first_sent_start_before_ann = self.text.rfind(".", 0, min_sorted_offsets)
@@ -229,10 +299,188 @@ class QuinexPostprocessing():
         else:
             first_sent_end_after_ann += 1
 
+        quote_position = self._to_position_tuple(first_sent_start_before_ann, first_sent_end_after_ann)
+
         text_quote = (
             self.text[first_sent_start_before_ann:first_sent_end_after_ann].removeprefix(".").strip()
         )
-        return text_quote
+        return {
+            "quote": text_quote,
+            "quote_position": quote_position,
+        }
+
+    def _to_position_tuple(self, start, end):
+        """Build a normalized (start, end) tuple or None if invalid/missing."""
+        if isinstance(start, Integral) and isinstance(end, Integral) and start >= 0 and end >= start:
+            return (int(start), int(end))
+        return None
+
+    def _extract_text_and_position(self, annotation):
+        """Extract annotation text and a single position tuple."""
+        if not isinstance(annotation, dict):
+            return pd.NA, None
+
+        text = annotation.get("text", pd.NA)
+        is_implicit = annotation.get("is_implicit", False)
+        if is_implicit:
+            return text, None
+
+        return text, self._to_position_tuple(annotation.get("start"), annotation.get("end"))
+
+    def _interval_union_length(self, intervals):
+        """Compute total covered length for possibly overlapping [start, end) intervals."""
+        if not intervals:
+            return 0
+
+        sorted_intervals = sorted(intervals, key=lambda x: x[0])
+        total = 0
+        cur_start, cur_end = sorted_intervals[0]
+
+        for start, end in sorted_intervals[1:]:
+            if start <= cur_end:
+                cur_end = max(cur_end, end)
+            else:
+                total += (cur_end - cur_start)
+                cur_start, cur_end = start, end
+
+        total += (cur_end - cur_start)
+        return total
+
+    def _merge_intervals(self, intervals):
+        """Merge overlapping [start, end) intervals (adjacent intervals stay separate)."""
+        if not intervals:
+            return []
+
+        intervals = sorted(intervals, key=lambda x: x[0])
+        merged = [intervals[0]]
+        for start, end in intervals[1:]:
+            last_start, last_end = merged[-1]
+            if start < last_end:
+                merged[-1] = (last_start, max(last_end, end))
+            else:
+                merged.append((start, end))
+        return merged
+
+    def _collect_row_positions(self, row):
+        """Collect valid positions from one row based on *_position columns."""
+        position_columns = [
+            "entity_position",
+            "property_position",
+            "quantity_position",
+            "quote_position",
+            "spatial_scope_position",
+            "temporal_scope_position",
+            "method_position",
+            "qualifier_position",
+            "reference_position",
+        ]
+
+        def _normalize_position(value):
+            """Normalize many persisted representations to a (start, end) tuple or None."""
+            if value is None or value is pd.NA:
+                return None
+
+            # Handle pandas/numpy missing values safely.
+            try:
+                if pd.isna(value):
+                    return None
+            except Exception:
+                pass
+
+            # Strings like "[10, 20]" or "(10, 20)" from parquet/object serialization.
+            if isinstance(value, str):
+                try:
+                    import ast
+                    value = ast.literal_eval(value)
+                except (ValueError, SyntaxError):
+                    return None
+
+            # Numpy arrays are common after parquet roundtrips.
+            if hasattr(value, "tolist") and not isinstance(value, (tuple, list)):
+                try:
+                    value = value.tolist()
+                except Exception:
+                    return None
+
+            if not isinstance(value, (tuple, list)) or len(value) != 2:
+                return None
+
+            start, end = value[0], value[1]
+            if isinstance(start, str):
+                start = start.strip()
+                if start == "":
+                    return None
+                try:
+                    start = int(float(start))
+                except ValueError:
+                    return None
+            if isinstance(end, str):
+                end = end.strip()
+                if end == "":
+                    return None
+                try:
+                    end = int(float(end))
+                except ValueError:
+                    return None
+
+            if isinstance(start, Integral) and isinstance(end, Integral) and start >= 0 and end >= start:
+                return (int(start), int(end))
+            return None
+
+        intervals = []
+        for col in position_columns:
+            if col not in row.index:
+                continue
+            position = _normalize_position(row[col])
+            if position is not None:
+                intervals.append(position)
+
+        return intervals
+
+    def summarize_text_coverage(self, df):
+        """
+        Summarize DOI-level text coverage using position tuple columns.
+
+        For each DOI, all position ranges from all claims are collected,
+        overlapping intervals are merged, and covered characters are counted once.
+
+        Args:
+            df (pd.DataFrame): Output from create_information_df.
+
+        Returns:
+            pd.DataFrame: per DOI coverage with columns
+                [DOI, claim_count, full_text_length, covered_char_count, covered_text_pct].
+        """
+        if df is None or df.empty:
+            return pd.DataFrame(columns=["DOI", "claim_count", "full_text_length", "covered_char_count", "covered_text_pct"])
+
+        per_doi_records = []
+        for doi, group in df.groupby("DOI", dropna=False):
+            claim_count = int(len(group))
+            text_lengths = group["full_text_length"].dropna() if "full_text_length" in group else pd.Series(dtype="float64")
+            full_text_length = int(text_lengths.iloc[0]) if not text_lengths.empty else pd.NA
+
+            intervals = []
+            for _, row in group.iterrows():
+                intervals.extend(self._collect_row_positions(row))
+
+            merged = self._merge_intervals(intervals)
+            covered_char_count = self._interval_union_length(merged)
+            covered_text_pct = 0
+            if isinstance(full_text_length, Integral) and full_text_length > 0:
+                covered_char_count = min(covered_char_count, full_text_length)
+                covered_text_pct = (covered_char_count / full_text_length) * 100
+
+            per_doi_records.append({
+                "DOI": doi,
+                "claim_count": claim_count,
+                "full_text_length": full_text_length,
+                "covered_char_count": covered_char_count,
+                "covered_text_pct": covered_text_pct,
+            })
+
+        per_doi_df = pd.DataFrame(per_doi_records)
+        return per_doi_df.convert_dtypes()
     
     def create_metadata_df(self, analysis, meta_df):
         """
@@ -309,10 +557,12 @@ class QuinexPostprocessing():
         """
 
         if 'quantity_normalized' in df.columns:
+            df = df.copy()
+            df['quantity_normalized'] = df['quantity_normalized'].apply(self.coerce_quantity_values)
             mask = df['quantity_normalized'].apply(self.has_string_value)
             num_bad = mask.sum()
             if num_bad > 0:
-                print(f"⚠️ Entferne {num_bad} problematische Zeilen mit String-Werten in 'quantity_normalized'.")
+                print(f"⚠️ Entferne {num_bad} problematische Zeilen mit nicht-konvertierbaren String-Werten in 'quantity_normalized'.")
             df = df[~mask]
 
         if os.path.exists(path):
@@ -329,7 +579,7 @@ class QuinexPostprocessing():
                 combined_df.to_parquet(path, index=False)
                 print(f"✅ Existing file found. Appended and saved updated DataFrame to '{path}'")
             except Exception as e:
-                print(f"❌ Error reading existing file: {e}")
+                print(f"❌ Error reading/writing parquet file: {e}")
         else:
             df.to_parquet(path, index=False)
             print(f"✅ New DataFrame saved to '{path}'")
@@ -354,17 +604,61 @@ class QuinexPostprocessing():
 
     def has_string_value(self, q):
         """
-        Prüft, ob in quantity_normalized mindestens ein value ein String ist.
+        Prueft, ob in quantity_normalized mindestens ein value als
+        nicht-konvertierbarer String vorliegt.
         """
         if not isinstance(q, dict):
             return False
         if "quantities" not in q:
             return False
         for item in q["quantities"]:
+            if not isinstance(item, dict):
+                continue
             v = item.get("value")
             if isinstance(v, str):
-                return True
+                _, ok = self._try_parse_numeric_string(v)
+                if not ok:
+                    return True
         return False
+
+    def _try_parse_numeric_string(self, value):
+        """Try to parse numeric strings like '0.282' (and decimal comma forms)."""
+        if not isinstance(value, str):
+            return value, False
+
+        candidate = value.strip()
+        if candidate.count(",") == 1 and "." not in candidate:
+            candidate = candidate.replace(",", ".")
+
+        parsed = pd.to_numeric(candidate, errors="coerce")
+        if pd.isna(parsed):
+            return value, False
+        return float(parsed), True
+
+    def coerce_quantity_values(self, q):
+        """Coerce string values in quantity_normalized.quantities[*].value to float."""
+        if not isinstance(q, dict):
+            return q
+        if "quantities" not in q or not isinstance(q["quantities"], list):
+            return q
+
+        q_new = q.copy()
+        quantities_new = []
+        for item in q["quantities"]:
+            if not isinstance(item, dict):
+                quantities_new.append(item)
+                continue
+
+            item_new = item.copy()
+            v = item_new.get("value")
+            if isinstance(v, str):
+                parsed, ok = self._try_parse_numeric_string(v)
+                if ok:
+                    item_new["value"] = parsed
+            quantities_new.append(item_new)
+
+        q_new["quantities"] = quantities_new
+        return q_new
 
     def _extract_units_from_source(self, unit_source):
         """Extract normalized unit dicts from a single quantity source."""

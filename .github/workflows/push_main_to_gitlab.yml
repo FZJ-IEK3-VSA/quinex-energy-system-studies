@@ -11,6 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          repository: FZJ-IEK3-VSA/quinex-energy-system-studies
           fetch-depth: 0
       - name: Push To Gitlab
         env:
@@ -24,5 +25,5 @@ jobs:
           git switch main
           echo "Checkout complete"
           echo start to push
-          git push https://push_to_jugit:${{ secrets.GITLAB_ACCESS_TOKEN }}@jugit.fz-juelich.de/iek-3/groups/urbanmodels/personal/gorres/quenix_application.git main
+          git push --force https://push_to_jugit:${{ secrets.GITLAB_ACCESS_TOKEN }}@jugit.fz-juelich.de/iek-3/groups/urbanmodels/personal/gorres/quenix_application.git main
           echo push done

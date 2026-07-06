@@ -132,7 +132,7 @@ def _render_readme_section():
                              - `Property Filtering`: Create classes (e.g. Lifetime, Efficiency).
                                 - Grey Box: Add keywords that identify matching records. Use commas or new lines to enter multiple keywords.                    
                                 - Red Box: Add keywords to exclude matches.
-                                - Add a Unit Filter for each property for conversions and a Year if the unit is a currency.
+                                - Add a Unit filter for each property for conversions. For currency units, Year is optional.
 
                         2) Filter metadata (Filters expander):
                              - Narrow the dataset by author origin, publication year, temporal or spatial scope,
@@ -281,7 +281,7 @@ def _render_mapping_filter(col_name):
                             new_year = st.text_input(
                                 "Year",
                                 key=year_key,
-                                placeholder="Required for spatial currency plots",
+                                placeholder="Optional for currency (fallback: Temporal Scope/ Publication Year)",
                                 icon=":material/calendar_today:",
                             )
                             st.session_state.regex_groups["Year"][row_idx][0] = new_year

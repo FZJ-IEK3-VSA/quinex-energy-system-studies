@@ -325,15 +325,6 @@ def render_spatial(regex_filters, regex_mapping):
             submitted = st.form_submit_button("Generate Spatial Plot", type="primary")
 
     if submitted:
-        missing_year_properties = unit_filter.get_spatial_currency_properties_without_year(regex_mapping)
-        if missing_year_properties:
-            joined_properties = ", ".join(missing_year_properties)
-            st.error(
-                "Spatial plot requires a valid Year for currency-based unit conversion "
-                f"in: {joined_properties}."
-            )
-            return
-
         # --- Daten vorbereiten ---
         df_all = prepare_df(regex_filters, regex_mapping)
         df_all = vis.convert_spatial(df_all, spatial_col="Spatial Scope")

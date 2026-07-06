@@ -141,13 +141,9 @@ def build_where_clause(regex_filters=None):
     include_unitless = bool(regex_filters.get("__include_unitless", False))
 
     for col, patterns in regex_filters.items():
-        if col.startswith("__"):
-            continue
-
-        if not patterns:
-            continue
-
         if col == "__unit_dimension":
+            if not patterns:
+                continue
             # exakte Dimension — kein Regex
             dim_clauses = [
                 f"\"{unit_dimension_column}\" = '{_sql_quote(d)}'" for d in patterns
@@ -156,7 +152,15 @@ def build_where_clause(regex_filters=None):
             if include_unitless:
                 unit_clauses.append(_build_unitless_dimension_clause(unit_dimension_column))
             clauses.append("(" + " OR ".join(unit_clauses) + ")")
-        elif col in {"Entity", "Property"}:
+            continue
+
+        if col.startswith("__"):
+            continue
+
+        if not patterns:
+            continue
+
+        if col in {"Entity", "Property"}:
             class_groups = regex_filters.get(f"__{col.lower()}_groups", [])
             exact_one_clause = _build_exactly_one_class_match_clause(col, class_groups)
 
@@ -1101,5 +1105,3 @@ def get_author_origin_values(limit=1000, regex_filters=None):
                 values.add(token)
 
     return sorted(values)
-
-

@@ -135,8 +135,8 @@ def format_units_for_display(df):
 def render(df, rows_per_page):
     df = format_units_for_display(df)
 
-    if "Author Origin" in df.columns:
-        df["Author Origin"] = df["Author Origin"].apply(format_list_column)
+    if "Associated Countries" in df.columns:
+        df["Associated Countries"] = df["Associated Countries"].apply(format_list_column)
     if "Reference" in df.columns:
         df["Reference"] = df["Reference"].apply(format_references_column)
 
@@ -145,7 +145,8 @@ def render(df, rows_per_page):
         "DOI",
         "Source",
         "Publication Year",
-        "Author Origin",
+        "Associated Countries",
+        "License Information",
     ]
 
     # Entity + its mapping

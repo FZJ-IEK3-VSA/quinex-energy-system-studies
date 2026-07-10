@@ -84,20 +84,21 @@ class QuinexPostprocessing():
             openalex_about_source = result.get("metadata", {}).get("provenance", {}).get("fulltext_source", {}).get("openalex_about_source", {})
             self.oa = openalex_about_source.get("is_oa", False) if openalex_about_source else False
 
-            self.licence_information = result.get("metadata", {}).get("provenance", {}).get("fulltext_source", {}).get("license_from_source", pd.NA)
+            self.licence_information = result.get("metadata", {}).get("provenance", {}).get("fulltext_source", {}).get("openalex_about_source", {}).get("license", pd.NA)
             
             metadata = result.get("metadata") or {}
             bibliographic = metadata.get("bibliographic") or {}
             authorships = bibliographic.get("authorships") or []
 
-            first_author = next(
-                (a for a in authorships if a.get("author_position") == "first"),
-                authorships[0] if authorships else None,
-            )
-            self.author = (
-                first_author.get("author", {}).get("display_name", pd.NA)
-                if first_author else pd.NA
-            )
+            # Collect all available author display names (deduplicated, order preserved).
+            authors = []
+            for a in authorships:
+                name = a.get("author", {}).get("display_name", pd.NA)
+                if isinstance(name, str):
+                    name = name.strip()
+                if name and name is not pd.NA and name not in authors:
+                    authors.append(name)
+            self.author = authors
 
             self.year = year_lookup.get(self.doi)
             self.source_url = result.get("metadata", {}).get("provenance", {}).get("fulltext_source", {}).get("url", pd.NA)
@@ -128,9 +129,24 @@ class QuinexPostprocessing():
 
         temporal_scope_raw = qualifiers.get("temporal_scope", {}) or {}
         temporal_scope = temporal_scope_raw.get("normalized", {'year': None})
-        temporal = {
-            "year": temporal_scope.get("year", pd.NA)
-            } if temporal_scope.get("year", pd.NA) else pd.NA
+        temporal_year = temporal_scope.get("year", pd.NA)
+        temporal_text = temporal_scope_raw.get("text", pd.NA)
+        if temporal_year is None:
+            temporal_year = pd.NA
+        if temporal_text is None:
+            temporal_text = pd.NA
+        temporal_text_missing = (
+            temporal_text is pd.NA or
+            (isinstance(temporal_text, str) and temporal_text.strip() == "")
+        )
+        temporal_year_missing = (
+            temporal_year is pd.NA or
+            temporal_year == ""
+        )
+        temporal = pd.NA if (temporal_text_missing or temporal_year_missing) else {
+            "text": temporal_text,
+            "year": temporal_year,
+        }
         _, temporal_position = self._extract_text_and_position(temporal_scope_raw)
 
         spatial_scope_raw = qualifiers.get("spatial_scope", {}) or {}
@@ -150,7 +166,8 @@ class QuinexPostprocessing():
         qualifier_text, qualifier_position = self._extract_text_and_position(qualifier_raw)
 
         reference_raw = qualifiers.get("reference", {}) or {}
-        reference_text, reference_position = self._extract_text_and_position(reference_raw)
+        _, reference_position = self._extract_text_and_position(reference_raw)
+        reference = self._build_reference_payload(reference_raw)
         
         classification = {
             "type": statement_classification.get("type", {}).get("class", pd.NA),
@@ -236,7 +253,7 @@ class QuinexPostprocessing():
             "method_position": method_position,
             "qualifier": qualifier_text,
             "qualifier_position": qualifier_position,
-            "reference": reference_text,
+            "reference": reference,
             "reference_position": reference_position,
         })
         return records
@@ -326,6 +343,69 @@ class QuinexPostprocessing():
             return text, None
 
         return text, self._to_position_tuple(annotation.get("start"), annotation.get("end"))
+
+    def _build_reference_payload(self, annotation):
+        """Build reference payload with text and compact normalized bibliography info."""
+        if not isinstance(annotation, dict):
+            return pd.NA
+
+        text = annotation.get("text", pd.NA)
+        if text is None:
+            text = pd.NA
+
+        normalized_entries = []
+        seen = set()
+
+        normalized = annotation.get("normalized", [])
+        if isinstance(normalized, list):
+            for item in normalized:
+                if not isinstance(item, dict):
+                    continue
+
+                bib_entries = item.get("bib_entries", [])
+                if not isinstance(bib_entries, list):
+                    continue
+
+                for bib in bib_entries:
+                    if not isinstance(bib, dict):
+                        continue
+
+                    title = bib.get("title", pd.NA)
+                    venue = bib.get("venue", pd.NA)
+
+                    if isinstance(title, str):
+                        title = title.strip() or pd.NA
+                    elif title is None:
+                        title = pd.NA
+
+                    if isinstance(venue, str):
+                        venue = venue.strip() or pd.NA
+                    elif venue is None:
+                        venue = pd.NA
+
+                    if title is pd.NA and venue is pd.NA:
+                        continue
+
+                    dedupe_key = (
+                        None if title is pd.NA else title,
+                        None if venue is pd.NA else venue,
+                    )
+                    if dedupe_key in seen:
+                        continue
+
+                    seen.add(dedupe_key)
+                    normalized_entries.append({"title": title, "venue": venue})
+
+        if text is pd.NA or (isinstance(text, str) and text.strip() == ""):
+            return pd.NA
+
+        if not normalized_entries:
+            return pd.NA
+
+        return {
+            "text": text,
+            "normalized": normalized_entries,
+        }
 
     def _interval_union_length(self, intervals):
         """Compute total covered length for possibly overlapping [start, end) intervals."""

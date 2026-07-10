@@ -134,7 +134,7 @@ def build_where_clause(regex_filters=None):
 
     unit_dimension_column = _resolve_unit_dimension_column_name()
 
-    author_origin_values = regex_filters.get("__author_origin_values", [])
+    associated_countries_values = regex_filters.get("__associated_countries_values", [])
     publication_year_range = regex_filters.get("__publication_year_range")
     temporal_scope_values = regex_filters.get("__temporal_scope_values", [])
     spatial_scope_values = regex_filters.get("__spatial_scope_values", [])
@@ -181,10 +181,10 @@ def build_where_clause(regex_filters=None):
     if include_unitless and "__unit_dimension" not in regex_filters:
         clauses.append(_build_unitless_dimension_clause(unit_dimension_column))
 
-    if author_origin_values:
-        author_clause = _build_contains_any_clause("Author Origin", author_origin_values)
-        if author_clause:
-            clauses.append(author_clause)
+    if associated_countries_values:
+        associated_countries_clause = _build_contains_any_clause("Associated Countries", associated_countries_values)
+        if associated_countries_clause:
+            clauses.append(associated_countries_clause)
 
     if temporal_scope_values:
         temporal_clause = _build_temporal_year_clause(temporal_scope_values)
@@ -314,7 +314,7 @@ def flatten_regex_filters(mapping_dict):
             flat["__include_unitless"] = True
 
     for key in [
-        "__author_origin_values",
+        "__associated_countries_values",
         "__temporal_scope_values",
         "__spatial_scope_values",
         "__value_min",
@@ -1063,8 +1063,8 @@ def get_scope_values(column, limit=400, regex_filters=None):
     return sorted(values, key=lambda x: x.lower())
 
 
-def get_author_origin_values(limit=1000, regex_filters=None):
-    column = "Author Origin"
+def get_associated_countries_values(limit=1000, regex_filters=None):
+    column = "Associated Countries"
     if column not in get_columns():
         return []
 

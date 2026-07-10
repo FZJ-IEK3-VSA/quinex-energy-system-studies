@@ -135,7 +135,7 @@ def _render_readme_section():
                                 - Add a Unit filter for each property for conversions. For currency units, Year is optional.
 
                         2) Filter metadata (Filters expander):
-                             - Narrow the dataset by author origin, publication year, temporal or spatial scope,
+                             - Narrow the dataset by associated countries, publication year, temporal or spatial scope,
                                  or numeric value range. Facets react to each other so the available options update
                                  based on your selections.
 
@@ -337,7 +337,7 @@ def _render_metadata_filters(facet_base_filters=None):
     """
     if "metadata_filters" not in st.session_state:
         st.session_state.metadata_filters = {
-            "author_origin": [],
+            "associated_countries": [],
             "publication_year_range": None,
             "temporal_scope": [],
             "spatial_scope": [],
@@ -353,7 +353,7 @@ def _render_metadata_filters(facet_base_filters=None):
 
     # Aktuelle Selektionen aus Widget-State lesen (falls vorhanden),
     # damit Facetten sofort gegenseitig reagieren.
-    current_author_origin = st.session_state.get("meta_author_origin", state.get("author_origin", []))
+    current_associated_countries = st.session_state.get("meta_associated_countries", state.get("associated_countries", []))
     current_temporal_scope = st.session_state.get("meta_temporal_scope", state.get("temporal_scope", []))
     current_spatial_scope = st.session_state.get("meta_spatial_scope", state.get("spatial_scope", []))
     current_year_range = st.session_state.get("meta_publication_year", state.get("publication_year_range"))
@@ -363,8 +363,8 @@ def _render_metadata_filters(facet_base_filters=None):
     def _faceted_filters(exclude_key=None):
         filters = dict(facet_base_filters or {})
 
-        if exclude_key != "author_origin" and current_author_origin:
-            filters["__author_origin_values"] = current_author_origin
+        if exclude_key != "associated_countries" and current_associated_countries:
+            filters["__associated_countries_values"] = current_associated_countries
         if exclude_key != "temporal_scope" and current_temporal_scope:
             filters["__temporal_scope_values"] = current_temporal_scope
         if exclude_key != "spatial_scope" and current_spatial_scope:
@@ -374,8 +374,8 @@ def _render_metadata_filters(facet_base_filters=None):
 
         return filters
 
-    author_origin_options = duckdb_filter.get_author_origin_values(
-        regex_filters=_faceted_filters(exclude_key="author_origin")
+    associated_countries_options = duckdb_filter.get_associated_countries_values(
+        regex_filters=_faceted_filters(exclude_key="associated_countries")
     )
     temporal_scope_options = duckdb_filter.get_scope_values(
         "Temporal Scope", regex_filters=_faceted_filters(exclude_key="temporal_scope")
@@ -387,12 +387,12 @@ def _render_metadata_filters(facet_base_filters=None):
         regex_filters=_faceted_filters(exclude_key="publication_year_range")
     )
 
-    selected_author_origin = st.multiselect(
-        "Author Origin",
-        options=author_origin_options,
-        default=[v for v in current_author_origin if v in author_origin_options],
+    selected_associated_countries = st.multiselect(
+        "Associated Countries",
+        options=associated_countries_options,
+        default=[v for v in current_associated_countries if v in associated_countries_options],
         placeholder="Select one or more countries",
-        key="meta_author_origin",
+        key="meta_associated_countries",
     )
 
     if year_min is not None and year_max is not None:
@@ -474,7 +474,7 @@ def _render_metadata_filters(facet_base_filters=None):
     selected_value_max = _parse_float_optional(selected_value_max_raw)
 
     st.session_state.metadata_filters = {
-        "author_origin": selected_author_origin,
+        "associated_countries": selected_associated_countries,
         "publication_year_range": selected_year_range,
         "temporal_scope": selected_temporal_scope,
         "spatial_scope": selected_spatial_scope,
@@ -483,7 +483,7 @@ def _render_metadata_filters(facet_base_filters=None):
     }
 
     return {
-        "__author_origin_values": selected_author_origin,
+        "__associated_countries_values": selected_associated_countries,
         "__publication_year_range": selected_year_range,
         "__temporal_scope_values": selected_temporal_scope,
         "__spatial_scope_values": selected_spatial_scope,

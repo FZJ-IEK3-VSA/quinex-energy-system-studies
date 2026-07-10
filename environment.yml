@@ -23,6 +23,7 @@ dependencies:
   - geopy
   - streamlit
   - duckdb
+  - spacy
   - pip
   - pip:
      - quinex-utils

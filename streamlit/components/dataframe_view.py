@@ -3,6 +3,22 @@ import numpy as np
 import ast
 
 
+def is_missing_display_value(val):
+    if val is None:
+        return True
+
+    if isinstance(val, str):
+        return val.strip() == "<NA>"
+
+    if getattr(type(val), "__name__", "") == "NAType":
+        return True
+
+    if isinstance(val, (float, np.floating)):
+        return np.isnan(val)
+
+    return False
+
+
 def style_dataframe(df):
     highlight_cols = ['Entity Mapping', 'Property Mapping', 'Unit Mapping', 'Value Converted']
 
@@ -82,17 +98,21 @@ def format_unit_list(u):
 
 
 def format_list_column(val):
+    if is_missing_display_value(val):
+        return None
+
     if isinstance(val, (list, tuple, np.ndarray)):
         items = list(val) if isinstance(val, np.ndarray) else val
         return str(items)
     if isinstance(val, str):
         return val
-    if val is None:
-        return ""
     return str(val)
 
 
 def format_references_column(val):
+    if is_missing_display_value(val):
+        return None
+
     if isinstance(val, str):
         s = val.strip()
         if s.startswith("["):
@@ -104,24 +124,17 @@ def format_references_column(val):
             return s
 
     if isinstance(val, dict):
-        val = [val]
+        return str([val])
 
     if isinstance(val, (list, tuple)):
-        parts = []
-        for item in val:
-            if isinstance(item, dict):
-                title = item.get("title", "")
-                venue = item.get("venue", "")
-                if venue:
-                    parts.append(f"{title} ({venue})")
-                else:
-                    parts.append(title)
-            else:
-                parts.append(str(item))
-        return "; ".join(parts)
+        return str(list(val))
 
-    if val is None:
-        return ""
+    if isinstance(val, np.ndarray):
+        try:
+            return str(val.tolist())
+        except Exception:
+            return str(val)
+
     return str(val)
 
 

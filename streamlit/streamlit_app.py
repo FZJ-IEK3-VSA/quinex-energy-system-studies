@@ -17,6 +17,15 @@ DEFAULT_ROWS_PER_PAGE = 10
 ENV_PATH = os.path.abspath(os.path.join(BASE_DIR, "..", ".env"))
 
 
+def _inject_umami_analytics():
+    st.html("""
+    <script
+        defer
+        src="https://ice-2-umami.fz-juelich.de/script.js"
+        data-website-id="053a373e-9043-467b-878f-51b6fff859a1">
+    </script>
+    """, unsafe_allow_javascript=True)
+
 def _load_env_file(path):
     if not os.path.exists(path):
         return
@@ -218,6 +227,8 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+_inject_umami_analytics()
 
 # --- Styling / UI Setup ---
 style.add_textinput_style()

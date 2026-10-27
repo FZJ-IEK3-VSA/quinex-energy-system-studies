@@ -256,7 +256,28 @@ COUNTRY_NAME_VARIANTS = {
     "East Timor": "TLS",
     "Turkmenistan": "TKM",
     "Uzbekistan": "UZB",
-    "Yemen": "YEM"
+    "Yemen": "YEM",
+    "Hong Kong": "HKG",
+    # Additional Europe
+    "Austria": "AUT",
+    "Czech Republic": "CZE",
+    "Czechia": "CZE",
+    "Denmark": "DNK",
+    "Finland": "FIN",
+    "Ireland": "IRL",
+    "Norway": "NOR",
+    "Switzerland": "CHE",
+    # Americas
+    "Argentina": "ARG",
+    "Chile": "CHL",
+    "Colombia": "COL",
+    "Cuba": "CUB",
+    "Ecuador": "ECU",
+    "Nicaragua": "NIC",
+    "Peru": "PER",
+    "Puerto Rico": "PRI",
+    # Oceania
+    "Samoa": "WSM",
 }
 
 def normalize_country_code(country_input: str) -> str:

@@ -10,3 +10,4 @@ quinex_application/postprocessing/__pycache__/*
 quinex_application/visualisation/__pycache__/*
 quinex_application/quinex_processing/__pycache__/*
 streamlit/duckdb_data/**
+notebooks/capfactor_data_500.csv

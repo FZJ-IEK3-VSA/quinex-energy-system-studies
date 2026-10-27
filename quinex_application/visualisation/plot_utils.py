@@ -332,6 +332,57 @@ def calculate_subplot_layout(n_plots: int, n_cols: int = 2) -> tuple:
     return n_rows, n_cols
 
 
+def add_corpus_note(fig, text: str, fontsize: float = None, color: str = '#52514e'):
+    """
+    Add a one-line corpus statement below all existing figure content.
+
+    The note is placed under the figure's tight bounding box, so it never
+    overlaps axis labels, legends or colorbars and is kept by
+    savefig(..., bbox_inches='tight').
+
+    Args:
+        fig: Matplotlib figure.
+        text: Corpus statement (see data_processing.describe_corpus).
+        fontsize: Font size (default: 80% of the current base font size).
+        color: Text color (secondary text ink).
+
+    Returns:
+        The matplotlib Text artist.
+    """
+    if fontsize is None:
+        fontsize = 0.8 * plt.rcParams['font.size']
+
+    renderer = fig.canvas.get_renderer()
+    bbox = fig.get_tightbbox(renderer)
+    fig_width, fig_height = fig.get_size_inches()
+    gap = 1.5 * fontsize / 72  # inches
+    x = bbox.x0 / fig_width
+    y = (bbox.y0 - gap) / fig_height
+
+    return fig.text(x, y, text, ha='left', va='top', fontsize=fontsize, color=color)
+
+
+def show_figure(fig, save_path: str = None):
+    """
+    Display a figure in a notebook, optionally save it, then close it.
+
+    Closing frees the figure's memory; otherwise every re-run of a plot
+    cell keeps another large figure alive.
+
+    Args:
+        fig: Matplotlib figure.
+        save_path: Optional path to save the figure to (bbox_inches='tight').
+    """
+    if save_path:
+        fig.savefig(save_path, bbox_inches='tight')
+    try:
+        from IPython.display import display
+        display(fig)
+    except ImportError:
+        plt.show()
+    plt.close(fig)
+
+
 def flatten_axes(axes, n_plots: int):
     """
     Flatten axes array for consistent iteration.

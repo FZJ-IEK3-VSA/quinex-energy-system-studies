@@ -10,8 +10,16 @@ import numpy as np
 import pandas as pd
 import scipy.stats as st
 
-from quinex_utils.parsers.unit_parser import FastSymbolicUnitParser
-unit_parser = FastSymbolicUnitParser(load_ucum_codes=True)
+_unit_parser = None
+
+
+def _get_unit_parser():
+    """Create the unit parser on first use (importing quinex_utils loads spaCy and is slow)."""
+    global _unit_parser
+    if _unit_parser is None:
+        from quinex_utils.parsers.unit_parser import FastSymbolicUnitParser
+        _unit_parser = FastSymbolicUnitParser(load_ucum_codes=True)
+    return _unit_parser
 
 
 
@@ -98,7 +106,7 @@ def convert_unit(
     output_unit = _preprocess_unit(output_unit)
     
     # Perform conversion with years as default parameters
-    conv_value, conv_unit_data = unit_parser.unit_conversion(
+    conv_value, conv_unit_data = _get_unit_parser().unit_conversion(
         value=value,
         from_compound_unit=input_unit,
         to_compound_unit=output_unit,
@@ -164,7 +172,7 @@ def convert_row(
     
     # Handle target_unit: parse if string, use directly if list
     if isinstance(target_unit, str):
-        output_unit = unit_parser.parse(target_unit)
+        output_unit = _get_unit_parser().parse(target_unit)
     elif isinstance(target_unit, list):
         output_unit = target_unit
     else:
@@ -281,6 +289,270 @@ def filter_by_min_papers(
     return df[df[year_col].isin(valid_years)]
 
 
+# Source labels assigned to full text papers in Step7_PrepData (map_source).
+FULL_TEXT_SOURCE_LABELS = {"elsevier", "openalex oa url"}
+
+FULL_TEXT_LABEL = "Full text"
+ABSTRACT_ONLY_LABEL = "Abstract only"
+
+
+def classify_dois_full_text(
+    df: pd.DataFrame,
+    doi_col: str = "DOI",
+    source_col: str = "Source",
+) -> pd.Series:
+    """
+    Determine per DOI whether the full text was available.
+
+    Mirrors map_source in Step7_PrepData: a source counts as full text if it
+    contains a URL (raw 'source_url') or is a mapped full text label
+    ("Elsevier", "OpenAlex OA URL"). Everything else, i.e. an empty source or
+    "Abstract (Scopus/WOS)", counts as abstract-only. A DOI counts as full
+    text as soon as any of its rows has a full text source.
+
+    Args:
+        df: DataFrame containing DOI and source information.
+        doi_col: Column containing DOI/paper identifiers.
+        source_col: Column containing the text source.
+
+    Returns:
+        Boolean Series indexed by (stripped) DOI, True for full text.
+    """
+    dois = df[doi_col].astype('string').str.strip()
+    source_text = df[source_col].astype('string').str.strip()
+    is_full_text = (
+        source_text.str.contains(r'https?://', case=False, regex=True, na=False)
+        | source_text.str.lower().isin(FULL_TEXT_SOURCE_LABELS)
+    )
+    valid = dois.notna() & dois.ne('')
+    return is_full_text[valid].groupby(dois[valid]).any().rename('full_text')
+
+
+def split_dois_by_text_availability(
+    df: pd.DataFrame,
+    dois: set,
+    doi_col: str,
+    source_col: str | None,
+) -> dict | None:
+    """
+    Split DOIs into full text and abstract-only publications
+    (classification see classify_dois_full_text).
+
+    Args:
+        df: DataFrame containing DOI and source information.
+        dois: Set of DOIs to classify.
+        doi_col: Column containing DOI/paper identifiers.
+        source_col: Column containing the text source.
+
+    Returns:
+        Dict with sets 'full_text' and 'abstract_only', or None if the
+        source column is unavailable.
+    """
+    if df is None or source_col is None or source_col not in df.columns or doi_col not in df.columns:
+        return None
+
+    sources = df[df[doi_col].astype('string').str.strip().isin(dois)]
+    has_full_text = classify_dois_full_text(sources, doi_col, source_col)
+    full_text = set(has_full_text[has_full_text].index)
+    return {'full_text': full_text, 'abstract_only': set(dois) - full_text}
+
+
+def merge_text_availability_splits(splits: list) -> dict | None:
+    """
+    Merge several results of split_dois_by_text_availability.
+
+    A DOI counted as full text in any split counts as full text overall.
+    Splits that are None (source column unavailable) are ignored.
+    """
+    splits = [s for s in splits if s is not None]
+    if not splits:
+        return None
+    full_text = set().union(*(s['full_text'] for s in splits))
+    abstract_only = set().union(*(s['abstract_only'] for s in splits)) - full_text
+    return {'full_text': full_text, 'abstract_only': abstract_only}
+
+
+def save_text_availability_split(split: dict, path: str):
+    """
+    Save the contributing DOIs of a figure (result of split_dois_by_text_availability) as JSON.
+
+    Used to merge the publication counts of panels that are produced in
+    different notebooks but combined into one figure.
+    """
+    import json
+    import os
+
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump({key: sorted(dois) for key, dois in split.items()}, f, indent=1)
+
+
+def load_text_availability_split(path: str) -> dict:
+    """Load contributing DOIs saved with save_text_availability_split."""
+    import json
+
+    with open(path, encoding='utf-8') as f:
+        return {key: set(dois) for key, dois in json.load(f).items()}
+
+
+def format_text_availability_counts(split: dict | None) -> str:
+    """Format DOI counts from split_dois_by_text_availability for printing."""
+    if split is None:
+        return "full text/abstract split unavailable: source column not found"
+    return (
+        f"full text: {len(split['full_text'])}, "
+        f"abstract only: {len(split['abstract_only'])}"
+    )
+
+
+# =============================================================================
+# Corpus Selection
+# =============================================================================
+
+CORPUS_LABELS = {
+    'all': "All publications (full text and abstract only)",
+    'full_text': "Full-text publications only",
+    'abstract_only': "Abstract-only publications only",
+}
+
+DOI_COLUMN_CANDIDATES = ('DOI', 'doi')
+SOURCE_COLUMN_CANDIDATES = ('source', 'Source', 'source_url')
+
+
+def _resolve_column(df: pd.DataFrame, candidates: tuple, what: str) -> str:
+    """Return the first column of df matching one of the candidates (case-insensitive)."""
+    lower_to_original = {str(c).lower(): c for c in df.columns}
+    for candidate in candidates:
+        if candidate in df.columns:
+            return candidate
+        if candidate.lower() in lower_to_original:
+            return lower_to_original[candidate.lower()]
+    raise KeyError(f"No {what} column found (tried {candidates}). Columns: {list(df.columns)}")
+
+
+def filter_corpus(
+    df: pd.DataFrame,
+    corpus: str = 'all',
+    doi_col: str = None,
+    source_col: str = None,
+) -> pd.DataFrame:
+    """
+    Restrict records to a corpus: 'all', 'full_text' or 'abstract_only'.
+
+    Publications are classified with classify_dois_full_text.
+
+    Args:
+        df: Record-level DataFrame.
+        corpus: 'all', 'full_text' or 'abstract_only'.
+        doi_col: DOI column (default: 'DOI'/'doi').
+        source_col: Text source column (default: 'source'/'Source'/'source_url').
+
+    Returns:
+        Filtered DataFrame (df itself for corpus='all').
+    """
+    if corpus not in CORPUS_LABELS:
+        raise ValueError(f"corpus must be one of {list(CORPUS_LABELS)}, got {corpus!r}.")
+    if corpus == 'all':
+        return df
+
+    doi_col = doi_col or _resolve_column(df, DOI_COLUMN_CANDIDATES, "DOI")
+    source_col = source_col or _resolve_column(df, SOURCE_COLUMN_CANDIDATES, "text source")
+    is_full_text = classify_dois_full_text(df, doi_col, source_col)
+    keep = set(is_full_text[is_full_text == (corpus == 'full_text')].index)
+    return df[df[doi_col].astype('string').str.strip().isin(keep)]
+
+
+def restrict_datasets_to_full_text(
+    data_list: list,
+    doi_col: str = None,
+    source_col: str = None,
+    title_key: str = 'title',
+) -> list:
+    """
+    Return copies of plot dataset dicts whose 'df' only contains records of full-text publications.
+
+    Used by the temporal and spatial plots (full_text_only=True) so that all
+    filtering, aggregation and statistics run on full-text records only.
+    A dataset can override the columns via its 'doi_col' / 'source_col' keys.
+
+    Args:
+        data_list: List of dicts with a 'df' key.
+        doi_col: Preferred DOI column (default: 'DOI'/'doi').
+        source_col: Preferred text source column (default: 'source'/'Source'/'source_url').
+        title_key: Key of the dataset title used in the printed summary.
+
+    Returns:
+        New list of dataset dicts (the input is not modified).
+    """
+    restricted = []
+    for idx, data in enumerate(data_list, start=1):
+        df = data['df']
+        entry_doi_col = _resolve_column(
+            df, tuple(c for c in (data.get('doi_col'), doi_col) if c) + DOI_COLUMN_CANDIDATES, "DOI"
+        )
+        entry_source_col = _resolve_column(
+            df, tuple(c for c in (data.get('source_col'), source_col) if c) + SOURCE_COLUMN_CANDIDATES,
+            "text source",
+        )
+        df_full_text = filter_corpus(df, 'full_text', entry_doi_col, entry_source_col)
+
+        n_removed_pubs = (
+            df[entry_doi_col].nunique() - df_full_text[entry_doi_col].nunique()
+        )
+        print(
+            f"[{idx}] {data.get(title_key) or f'Dataset {idx}'} | full text only: "
+            f"removed {len(df) - len(df_full_text)} records from {n_removed_pubs} "
+            f"abstract-only publications ({len(df_full_text)} records kept)"
+        )
+        restricted.append({**data, 'df': df_full_text})
+    return restricted
+
+
+def describe_corpus(
+    corpus: str,
+    df: pd.DataFrame = None,
+    split: dict = None,
+    doi_col: str = None,
+    source_col: str = None,
+) -> str:
+    """
+    Return a one-line corpus statement for figure notes and captions.
+
+    Example: "Corpus: Full-text publications only; n = 5,596 publications
+    (full text: 5,596, abstract only: 0)".
+
+    Args:
+        corpus: Key of CORPUS_LABELS or any custom label.
+        df: Optional record-level DataFrame to count publications from.
+        split: Optional result of split_dois_by_text_availability (takes precedence over df).
+        doi_col: DOI column of df (default: 'DOI'/'doi').
+        source_col: Text source column of df. If df has none, only the number
+            of publications is reported.
+
+    Returns:
+        Corpus statement.
+    """
+    text = f"Corpus: {CORPUS_LABELS.get(corpus, corpus)}"
+
+    if split is None and df is not None:
+        doi_col = doi_col or _resolve_column(df, DOI_COLUMN_CANDIDATES, "DOI")
+        dois = set(df[doi_col].dropna().astype(str).str.strip()) - {''}
+        try:
+            source_col = source_col or _resolve_column(df, SOURCE_COLUMN_CANDIDATES, "text source")
+        except KeyError:
+            return f"{text}; n = {len(dois):,} publications"
+        split = split_dois_by_text_availability(df, dois, doi_col, source_col)
+
+    if split is None:
+        return text
+    n_full_text = len(split['full_text'])
+    n_abstract = len(split['abstract_only'])
+    return (
+        f"{text}; n = {n_full_text + n_abstract:,} publications "
+        f"(full text: {n_full_text:,}, abstract only: {n_abstract:,})"
+    )
+
+
 # =============================================================================
 # Spatial Data Processing
 # =============================================================================
@@ -350,18 +622,23 @@ def apply_jitter_to_datasets(
 ) -> list:
     """
     Apply jitter to all DataFrames in a datasets list.
-    
+
+    DataFrames without latitude/longitude columns (e.g. country-level
+    choropleth data) and a jitter_strength of 0 leave the data unchanged.
+
     Args:
         datasets: List of dicts with 'df' key containing DataFrames.
         jitter_strength: Maximum shift in degrees.
-        
+
     Returns:
         List of datasets with jittered coordinates.
     """
     jittered = []
     for d in datasets:
         d_copy = d.copy()
-        d_copy['df'] = apply_jitter(d_copy['df'], jitter_strength=jitter_strength)
+        df = d_copy['df']
+        if jitter_strength and {'latitude', 'longitude'}.issubset(df.columns):
+            d_copy['df'] = apply_jitter(df, jitter_strength=jitter_strength)
         jittered.append(d_copy)
     return jittered
 

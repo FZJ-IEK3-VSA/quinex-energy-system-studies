@@ -15,6 +15,7 @@ from quinex_application.visualisation.plot_utils import (
     map_values_to_sizes,
     create_entity_color_palette,
     flatten_axes,
+    add_corpus_note,
 )
 from quinex_application.visualisation.entity_colors import DEFAULT_ENTITY_COLORS
 from quinex_application.postprocessing.data_processing import (
@@ -22,6 +23,11 @@ from quinex_application.postprocessing.data_processing import (
     parse_temporal_scope,
     filter_by_min_papers,
     calculate_aggregates,
+    split_dois_by_text_availability,
+    merge_text_availability_splits,
+    format_text_availability_counts,
+    describe_corpus,
+    restrict_datasets_to_full_text,
 )
 
 
@@ -111,7 +117,10 @@ class TemporalVisualisation:
         show_log_regression: bool = False,
         regression_year_range: tuple = None,
         doi_col: str = "DOI",
+        source_col: str = "Source",
         print_summary: bool = True,
+        full_text_only: bool = False,
+        corpus_note: bool = True,
     ):
         """
         Plot properties over time with customizable styling and statistics.
@@ -160,7 +169,18 @@ class TemporalVisualisation:
                 used for regression fit.
             doi_col: Default DOI column used to count contributing studies.
                 Can be overridden per entry via data['doi_col'].
+            source_col: Default column containing the text source, used to split
+                contributing studies into full text and abstract-only.
+                Can be overridden per entry via data['source_col'].
             print_summary: Whether to print temporal filter and DOI summary stats.
+            full_text_only: If True, only records from full-text publications are
+                used. The restriction is applied before any filtering, so IQR
+                filter, thresholds, aggregates, regression lines and the returned
+                data tables (and statistics computed from them) all refer to
+                full-text publications only. 'additional_data' (external reference
+                series) is not affected.
+            corpus_note: Whether to add a note stating the corpus and the number of
+                contributing publications below the figure (see add_corpus_note).
 
         Returns:
             Tuple of (fig, data_tables) where:
@@ -168,6 +188,9 @@ class TemporalVisualisation:
                 - data_tables: Dictionary mapping subplot titles to their aggregated data (DataFrames)
         """
         set_font_sizes(font_size)
+
+        if full_text_only:
+            data_list = restrict_datasets_to_full_text(data_list, doi_col, source_col)
 
         n_plots = len(data_list)
         ncols = 2 if n_plots > 1 else 1
@@ -190,6 +213,7 @@ class TemporalVisualisation:
             central_tendency,
             error_type,
             doi_col,
+            source_col,
         )
 
         if print_summary:
@@ -238,6 +262,19 @@ class TemporalVisualisation:
         )
 
         plt.tight_layout()
+
+        # Contributing DOIs of this figure, e.g. to merge with other figures
+        # (see save_text_availability_split).
+        total_split = merge_text_availability_splits(
+            [data['text_availability'] for data in prepared_data]
+        )
+        self.last_contributing_split = total_split
+
+        if corpus_note:
+            note = describe_corpus('full_text' if full_text_only else 'all', split=total_split)
+            add_corpus_note(fig, note)
+            print(note)
+
         return fig, data_tables
 
     def _prepare_temporal_data(
@@ -254,6 +291,7 @@ class TemporalVisualisation:
         central_tendency: str,
         error_type: str,
         doi_col: str,
+        source_col: str = "Source",
     ) -> list:
         """Prepare data for temporal plots.
 
@@ -269,6 +307,10 @@ class TemporalVisualisation:
             entry_doi_col = self._resolve_existing_column(
                 df,
                 [data.get('doi_col', doi_col), 'DOI', 'doi']
+            )
+            entry_source_col = self._resolve_existing_column(
+                df,
+                [data.get('source_col', source_col), 'Source', 'source_url']
             )
 
             # Allow per-entry override of min thresholds
@@ -311,6 +353,10 @@ class TemporalVisualisation:
             else:
                 contributing_dois = set()
 
+            text_availability = split_dois_by_text_availability(
+                contributing_df, contributing_dois, entry_doi_col, entry_source_col
+            )
+
             prepared.append({
                 'df': df,
                 'agg_df': agg_df,
@@ -322,6 +368,7 @@ class TemporalVisualisation:
                 'rows_after_iqr': rows_after_iqr,
                 'iqr_removed_rows': iqr_removed_rows,
                 'contributing_dois': contributing_dois,
+                'text_availability': text_availability,
             })
 
         return prepared
@@ -347,6 +394,7 @@ class TemporalVisualisation:
         print("\n=== Temporal Plot Generation Summary ===")
 
         total_unique_dois = set()
+        dataset_splits = []
         doi_available_any = False
 
         for idx, data in enumerate(prepared_data, start=1):
@@ -371,15 +419,20 @@ class TemporalVisualisation:
 
             doi_available_any = True
             total_unique_dois.update(dataset_dois)
+            dataset_split = data['text_availability']
+            dataset_splits.append(dataset_split)
             print(
                 f"    Contributing studies ({doi_col}): "
-                f"{len(dataset_dois)} unique DOI(s)"
+                f"{len(dataset_dois)} unique DOI(s) "
+                f"({format_text_availability_counts(dataset_split)})"
             )
 
         if doi_available_any:
+            total_split = merge_text_availability_splits(dataset_splits)
             print(
                 "Total contributing studies in this generated figure: "
-                f"{len(total_unique_dois)} unique DOI(s)"
+                f"{len(total_unique_dois)} unique DOI(s) "
+                f"({format_text_availability_counts(total_split)})"
             )
         else:
             print("Total contributing studies in this generated figure: DOI column unavailable")

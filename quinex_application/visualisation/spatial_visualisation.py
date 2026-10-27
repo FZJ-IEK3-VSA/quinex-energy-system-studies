@@ -20,6 +20,7 @@ from quinex_application.visualisation.plot_utils import (
     get_color_map,
     style_legend_frame,
     flatten_axes,
+    add_corpus_note,
 )
 from quinex_application.visualisation.entity_colors import DEFAULT_ENTITY_COLORS
 from quinex_application.postprocessing.data_processing import (
@@ -27,6 +28,11 @@ from quinex_application.postprocessing.data_processing import (
     parse_spatial_scope,
     apply_jitter_to_datasets,
     calculate_aggregates,
+    split_dois_by_text_availability,
+    merge_text_availability_splits,
+    format_text_availability_counts,
+    describe_corpus,
+    restrict_datasets_to_full_text,
 )
 
 
@@ -80,7 +86,10 @@ class SpatialVisualisation:
         color_scale_range: tuple = None,
         colorbar_ticks: list = None,
         doi_col: str = "DOI",
+        source_col: str = "Source",
         print_summary: bool = True,
+        full_text_only: bool = False,
+        corpus_note: bool = True,
     ):
         """
         Plot multiple datasets on a world map with color-coded values.
@@ -139,8 +148,17 @@ class SpatialVisualisation:
                 If None, matplotlib uses automatic ticks (default behavior).
             doi_col: Default DOI column used to count contributing studies.
                 Can be overridden per dataset via dataset['doi_col'].
+            source_col: Default column containing the text source, used to split
+                contributing studies into full text and abstract-only.
+                Can be overridden per dataset via dataset['source_col'].
             print_summary: Whether to print filter and DOI summary stats.
-            
+            full_text_only: If True, only records from full-text publications are
+                used. The restriction is applied before any filtering, so IQR
+                filter, color scale, country aggregates, regression and the
+                returned data tables all refer to full-text publications only.
+            corpus_note: Whether to add a note stating the corpus and the number of
+                contributing publications below the figure (see add_corpus_note).
+
         Returns:
             Tuple of (fig, data_tables) where:
                 - fig: Matplotlib figure
@@ -148,6 +166,9 @@ class SpatialVisualisation:
                   (country, avg_value, n_datapoints, ghi) from size-mode plots.
         """
         set_font_sizes(font_size)
+
+        if full_text_only:
+            datasets = restrict_datasets_to_full_text(datasets, doi_col, source_col)
 
         n_plots = len(datasets)
         has_any_size = any(d.get('plot_mode', 'points') == 'size' for d in datasets)
@@ -278,6 +299,13 @@ class SpatialVisualisation:
                     doi_col=entry_doi_col,
                 )
 
+            entry_source_col = self._resolve_existing_column(
+                data.get('df'), [data.get('source_col', source_col), 'Source', 'source_url']
+            )
+            data['_text_availability'] = split_dois_by_text_availability(
+                data.get('df'), data['_contributing_dois'], entry_doi_col, entry_source_col
+            )
+
         # Add colorbar (only for map subplots)
         map_axes = [a for a in axes if a is not None]
         if scalar_map and map_axes:
@@ -301,6 +329,18 @@ class SpatialVisualisation:
 
         if print_summary:
             self._print_world_generation_summary(jittered_datasets, apply_iqr)
+
+        # Contributing DOIs of this figure, e.g. to merge with other figures
+        # (see save_text_availability_split).
+        total_split = merge_text_availability_splits(
+            [data.get('_text_availability') for data in jittered_datasets]
+        )
+        self.last_contributing_split = total_split
+
+        if corpus_note:
+            note = describe_corpus('full_text' if full_text_only else 'all', split=total_split)
+            add_corpus_note(fig, note)
+            print(note)
 
         return fig, data_tables
 
@@ -381,6 +421,7 @@ class SpatialVisualisation:
         print("\n=== World Plot Generation Summary ===")
 
         total_unique_dois = set()
+        dataset_splits = []
         doi_available_any = False
 
         for idx, data in enumerate(datasets, start=1):
@@ -411,15 +452,20 @@ class SpatialVisualisation:
 
             doi_available_any = True
             total_unique_dois.update(dataset_dois)
+            dataset_split = data['_text_availability']
+            dataset_splits.append(dataset_split)
             print(
                 f"    Contributing studies ({doi_col}): "
-                f"{len(dataset_dois)} unique DOI(s)"
+                f"{len(dataset_dois)} unique DOI(s) "
+                f"({format_text_availability_counts(dataset_split)})"
             )
 
         if doi_available_any:
+            total_split = merge_text_availability_splits(dataset_splits)
             print(
                 "Total contributing studies in this generated figure: "
-                f"{len(total_unique_dois)} unique DOI(s)"
+                f"{len(total_unique_dois)} unique DOI(s) "
+                f"({format_text_availability_counts(total_split)})"
             )
         else:
             print("Total contributing studies in this generated figure: DOI column unavailable")

@@ -15,9 +15,14 @@ from quinex_application.visualisation.plot_utils import (
     map_values_to_sizes,
     create_entity_color_palette,
     flatten_axes,
+    hide_empty_axes,
     add_corpus_note,
 )
 from quinex_application.visualisation.entity_colors import DEFAULT_ENTITY_COLORS
+from quinex_application.visualisation.regression_metrics import (
+    iter_reference_series,
+    clip_reference_to_data_years,
+)
 from quinex_application.postprocessing.data_processing import (
     apply_iqr_filter,
     parse_temporal_scope,
@@ -112,6 +117,8 @@ class TemporalVisualisation:
         bubble_legend_values: list = None,
         temporal_col: str = "temporal_scope",
         publicationyear_col: str = "publication_year",
+        publication_year_fallback: bool = True,
+        data_year_range: tuple = None,
         min_datapoints_per_year: int = 5,
         min_papers_per_year: int = None,
         show_log_regression: bool = False,
@@ -133,6 +140,8 @@ class TemporalVisualisation:
                        - 'year_range' (tuple of min, max year) to set the x-axis range
                        - 'y_range' (tuple of min, max value) to set the y-axis range
                        - 'min_datapoints_per_year' (int) to override global min for this entry
+                       - 'publication_year_fallback' (bool) to override the global setting
+                       - 'data_year_range' (tuple of min, max year) to override the global setting
                        - 'min_papers_per_year' (int) to override global min for this entry
                        - 'number_xticks' (int) to override global x-tick interval for this entry
                                              - 'show_log_regression' (bool) to override global log-regression toggle
@@ -160,6 +169,16 @@ class TemporalVisualisation:
                 be shown in the size legend.
             temporal_col: Column containing temporal scope.
             publicationyear_col: Column containing publication year.
+            publication_year_fallback: If True, values without a temporal scope
+                year get the publication year. If False, only values with a
+                temporal scope year are used (the others are dropped before
+                thresholds and aggregates). Can be overridden per entry via
+                data['publication_year_fallback'].
+            data_year_range: Optional tuple (min_year, max_year); only values whose
+                year lies within are used (applied before the IQR filter, so
+                thresholds, aggregates, regression and statistics only see these
+                years). Unlike 'year_range', which only sets the x-axis. Can be
+                overridden per entry via data['data_year_range'].
             min_datapoints_per_year: Minimum data points required per year.
             min_papers_per_year: Minimum unique papers required per year.
             show_log_regression: Whether to overlay a log-linear regression per entity.
@@ -198,6 +217,7 @@ class TemporalVisualisation:
 
         fig, axes = plt.subplots(nrows, ncols, figsize=figsize, sharey=False)
         axes = flatten_axes(axes, n_plots)
+        hide_empty_axes(axes, n_plots)
 
         # Prepare data and get global parameters
         prepared_data = self._prepare_temporal_data(
@@ -214,6 +234,8 @@ class TemporalVisualisation:
             error_type,
             doi_col,
             source_col,
+            publication_year_fallback,
+            data_year_range,
         )
 
         if print_summary:
@@ -292,10 +314,13 @@ class TemporalVisualisation:
         error_type: str,
         doi_col: str,
         source_col: str = "Source",
+        publication_year_fallback: bool = True,
+        data_year_range: tuple = None,
     ) -> list:
         """Prepare data for temporal plots.
 
-        Each entry in data_list can override min_papers_per_year and min_datapoints_per_year.
+        Each entry in data_list can override min_papers_per_year, min_datapoints_per_year,
+        publication_year_fallback and data_year_range.
         """
         prepared = []
 
@@ -316,6 +341,19 @@ class TemporalVisualisation:
             # Allow per-entry override of min thresholds
             entry_min_papers = data.get('min_papers_per_year', min_papers_per_year)
             entry_min_datapoints = data.get('min_datapoints_per_year', min_datapoints_per_year)
+            entry_fallback = data.get('publication_year_fallback', publication_year_fallback)
+
+            # Year per value; without fallback, values lacking a temporal scope year
+            # are dropped here so they also do not affect the IQR fences.
+            rows_before_year = len(df)
+            df = parse_temporal_scope(
+                df, temporal_col, publicationyear_col if entry_fallback else None
+            )
+            no_scope_removed_rows = rows_before_year - len(df)
+
+            entry_year_range = data.get('data_year_range', data_year_range)
+            if entry_year_range is not None:
+                df = df[df['jahr'].between(*entry_year_range)]
 
             rows_before_iqr = len(df)
 
@@ -328,7 +366,6 @@ class TemporalVisualisation:
             rows_after_iqr = len(df)
             iqr_removed_rows = rows_before_iqr - rows_after_iqr
 
-            df = parse_temporal_scope(df, temporal_col, publicationyear_col)
             df = filter_by_min_papers(df, 'jahr', min_papers=entry_min_papers)
 
             agg_df = calculate_aggregates(
@@ -367,6 +404,8 @@ class TemporalVisualisation:
                 'rows_before_iqr': rows_before_iqr,
                 'rows_after_iqr': rows_after_iqr,
                 'iqr_removed_rows': iqr_removed_rows,
+                'publication_year_fallback': entry_fallback,
+                'no_scope_removed_rows': no_scope_removed_rows,
                 'contributing_dois': contributing_dois,
                 'text_availability': text_availability,
             })
@@ -410,6 +449,12 @@ class TemporalVisualisation:
                 )
             else:
                 print(f"[{idx}] {title} | IQR filter disabled")
+
+            if not data.get('publication_year_fallback', True):
+                print(
+                    f"    No publication year fallback: removed "
+                    f"{int(data.get('no_scope_removed_rows', 0))} values without temporal scope"
+                )
 
             doi_col = data.get('doi_col')
             dataset_dois = data.get('contributing_dois', set())
@@ -532,6 +577,10 @@ class TemporalVisualisation:
         if error_display:
             self._add_error_display(ax, agg_df, entity_col, color_dict, error_type, error_display)
 
+        # Reference lines only cover the years of the extracted data of their entity
+        if additional_data is not None:
+            additional_data = clip_reference_to_data_years(additional_data, agg_df, entity_col)
+
         # Optional per-entity log-linear regression overlays with %/yr slope annotation.
         if show_log_regression:
             self._add_log_regression_overlays(
@@ -558,18 +607,75 @@ class TemporalVisualisation:
         if y_range is not None:
             ax.set_ylim(y_range[0], y_range[1])
 
-        # Additional data (raw values, dashed lines)
+        # Additional data (raw values, dashed lines unless a 'linestyle' column is given)
+        series_styles = {}
         if additional_data is not None:
-            for entity in additional_data['entity'].unique():
-                entity_df = additional_data[additional_data['entity'] == entity].sort_values('year')
+            for entity, series, entity_df in iter_reference_series(additional_data):
+                entity_df = entity_df.sort_values('year')
                 color = color_dict.get(entity, 'gray')
-                ax.plot(
-                    entity_df['year'], entity_df['value'],
-                    color=color, linestyle='--', linewidth=6, alpha=0.8
+                linestyle = '--'
+                if 'linestyle' in entity_df.columns and pd.notna(entity_df['linestyle'].iloc[0]):
+                    linestyle = entity_df['linestyle'].iloc[0]
+                self._plot_outlined_reference_line(
+                    ax, entity_df['year'], entity_df['value'], color, linestyle
                 )
+                if series is not None:
+                    series_styles.setdefault(series, linestyle)
 
         if ax.get_legend() is not None:
             ax.get_legend().remove()
+
+        # Line style legend, needed once a subplot has several reference series
+        if len(series_styles) > 1:
+            ax.legend(
+                handles=[
+                    plt.Line2D([], [], color='gray', linestyle=style, linewidth=3, label=series)
+                    for series, style in series_styles.items()
+                ],
+                loc='upper right', fontsize='small',
+            )
+
+    @staticmethod
+    def _plot_outlined_reference_line(
+        ax, x, y, color, linestyle, linewidth: float = 6, outline_width: float = 1,
+        outline_color: str = 'black', alpha: float = 0.8
+    ):
+        """Plot a thick (dashed) reference line where every dash has an outline."""
+        named_patterns = {'--': 'dashed', ':': 'dotted', '-.': 'dashdot',
+                          'dashed': 'dashed', 'dotted': 'dotted', 'dashdot': 'dashdot'}
+        if isinstance(linestyle, tuple):
+            offset, pattern = linestyle
+        elif linestyle in named_patterns:
+            offset, pattern = 0, plt.rcParams[f'lines.{named_patterns[linestyle]}_pattern']
+        else:
+            offset, pattern = 0, None
+
+        outline_lw = linewidth + 2 * outline_width
+        if pattern is None:
+            # Solid line: a wider line underneath is sufficient
+            outline_style = '-'
+        else:
+            # Dash pattern in points, then every dash grows (and every gap shrinks) by
+            # the outline width on both sides, so each dash gets its own outline
+            scale = linewidth if plt.rcParams['lines.scale_dashes'] else 1
+            pattern_pt = [p * scale for p in pattern]
+            outline_pt = [
+                p + 2 * outline_width if i % 2 == 0 else max(p - 2 * outline_width, 0)
+                for i, p in enumerate(pattern_pt)
+            ]
+            outline_scale = outline_lw if plt.rcParams['lines.scale_dashes'] else 1
+            outline_style = (
+                (offset * scale + outline_width) / outline_scale,
+                [p / outline_scale for p in outline_pt],
+            )
+
+        ax.plot(x, y, color=outline_color, linestyle=outline_style,
+                linewidth=outline_lw, dash_capstyle='butt')
+        # White underlay keeps the semi-transparent fill colour unchanged by the outline
+        ax.plot(x, y, color='white', linestyle=linestyle, linewidth=linewidth,
+                dash_capstyle='butt')
+        ax.plot(x, y, color=color, linestyle=linestyle, linewidth=linewidth,
+                alpha=alpha, dash_capstyle='butt')
 
     def _add_log_regression_overlays(
         self,
@@ -606,7 +712,8 @@ class TemporalVisualisation:
                 add_df = add_df[add_df['value'] > 0]
                 if regression_year_range is not None:
                     add_df = add_df[(add_df['year'] >= start_year) & (add_df['year'] <= end_year)]
-                add_df = add_df.groupby(['entity', 'year'], as_index=False)['value'].mean()
+                keys = ['entity', 'series'] if 'series' in add_df.columns else ['entity']
+                add_df = add_df.groupby(keys + ['year'], as_index=False, dropna=False)['value'].mean()
 
         for entity in fit_df[entity_col].dropna().unique():
             entity_df = fit_df[fit_df[entity_col] == entity].copy()
@@ -627,8 +734,7 @@ class TemporalVisualisation:
             ax.plot(x, y_hat, linestyle='--', linewidth=2.0, color=color, alpha=0.9)
 
         if add_df is not None:
-            for entity in add_df['entity'].dropna().unique():
-                entity_df = add_df[add_df['entity'] == entity].copy()
+            for entity, _series, entity_df in iter_reference_series(add_df):
                 entity_df = entity_df.sort_values('year')
                 entity_df = entity_df[np.isfinite(entity_df['value'])]
                 entity_df = entity_df[entity_df['value'] > 0]

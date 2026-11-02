@@ -314,3 +314,57 @@ def normalize_country_code(country_input: str) -> str:
     
     # Return original if no normalization possible
     return country_input
+
+
+# =============================================================================
+# Country to ISO3 for comparisons with IRENA (no unresolved names)
+# =============================================================================
+
+# Names missing in COUNTRY_NAME_VARIANTS, incl. the short names used by IRENASTAT.
+# Kept separate so that normalize_country_code (used by other figures) is unchanged.
+ADDITIONAL_COUNTRY_NAMES = {
+    "Albania": "ALB", "Belarus": "BLR", "Bosnia Herzg": "BIH",
+    "Bosnia and Herzegovina": "BIH", "Bulgaria": "BGR", "Croatia": "HRV",
+    "Estonia": "EST", "Faroe Islands": "FRO", "Hungary": "HUN", "Iceland": "ISL",
+    "Kosovo": "XKX", "Latvia": "LVA", "Lithuania": "LTU", "Luxembourg": "LUX",
+    "Malta": "MLT", "Moldova Rep": "MDA", "Montenegro": "MNE",
+    "North Macedonia": "MKD", "Romania": "ROU", "Russian Fed": "RUS",
+    "Russian Federation": "RUS", "Serbia": "SRB", "Slovakia": "SVK",
+    "Slovenia": "SVN", "Sweden": "SWE", "Türkiye": "TUR", "Turkey": "TUR",
+    "Ukraine": "UKR", "Venezuela": "VEN", "Viet Nam": "VNM", "Korea Rep": "KOR",
+    "Republic of Korea": "KOR", "Iran IR": "IRN", "Costa Rica": "CRI",
+    "Dominican Rep": "DOM", "Dominican Republic": "DOM", "Uruguay": "URY",
+    "Panama": "PAN", "New Zealand": "NZL", "Guatemala": "GTM", "Honduras": "HND",
+    "Cyprus": "CYP",
+}
+
+
+def country_to_iso3(country_input: str) -> str | None:
+    """
+    Return the ISO3 code of a country (ISO3, ISO2 or name), or None if unknown.
+
+    Unlike normalize_country_code, unresolved inputs (e.g. regions such as
+    'Caribbean') give None instead of the original input.
+    """
+    if not country_input or not isinstance(country_input, str):
+        return None
+    iso3 = ADDITIONAL_COUNTRY_NAMES.get(country_input.strip())
+    if iso3 is None:
+        iso3 = normalize_country_code(country_input)
+    return iso3 if iso3 in ISO3_TO_ISO2 else None
+
+
+# Regions for comparisons with IRENA (ISO3 codes). Europe without the
+# transcontinental countries Russia and Türkiye; North America incl. Mexico.
+REGION_COUNTRIES = {
+    "Europe": [
+        "ALB", "AUT", "BEL", "BGR", "BIH", "BLR", "CHE", "CYP", "CZE", "DEU", "DNK",
+        "ESP", "EST", "FIN", "FRA", "FRO", "GBR", "GRC", "HRV", "HUN", "IRL", "ISL",
+        "ITA", "LTU", "LUX", "LVA", "MDA", "MKD", "MLT", "MNE", "NLD", "NOR", "POL",
+        "PRT", "ROU", "SRB", "SVK", "SVN", "SWE", "UKR", "XKX",
+    ],
+    "North America": ["CAN", "MEX", "USA"],
+}
+COUNTRY_TO_REGION = {
+    iso3: region for region, countries in REGION_COUNTRIES.items() for iso3 in countries
+}

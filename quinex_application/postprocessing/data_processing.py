@@ -243,9 +243,10 @@ def parse_temporal_scope(
     Args:
         df: Input DataFrame.
         temporal_col: Column containing temporal scope data.
-        fallback_col: Column to use if temporal scope is missing.
+        fallback_col: Column to use if temporal scope is missing. If None, rows
+            without a temporal scope year are dropped.
         output_col: Name for the output year column.
-        
+
     Returns:
         DataFrame with parsed year column.
     """
@@ -258,7 +259,11 @@ def parse_temporal_scope(
     
     df[output_col] = df[temporal_col].apply(lambda x: x.get('year', pd.NA))
     df[output_col] = pd.to_numeric(df[output_col], errors='coerce')
-    df[output_col] = df[output_col].fillna(df[fallback_col]).astype(int)
+    if fallback_col is None:
+        df = df[df[output_col].notna()]
+    else:
+        df[output_col] = df[output_col].fillna(df[fallback_col])
+    df[output_col] = df[output_col].astype(int)
     
     return df
 
@@ -588,8 +593,103 @@ def parse_spatial_scope(
     df['country'] = df[spatial_col].apply(
         lambda x: x.get('country') if isinstance(x, dict) else None
     )
-    
+
     return df
+
+
+def fill_author_countries(
+    df: pd.DataFrame,
+    metadata_path: str,
+    author_col: str = "author_countries",
+    doi_col: str = "DOI",
+    metadata_col: str = "countries",
+) -> pd.DataFrame:
+    """
+    Fill missing author countries from a publication metadata file.
+
+    Not all publications of the dataset are in the OpenAlex file the author
+    countries come from; an older metadata file (e.g. df_quinex_metadata.parquet)
+    still has the countries for most of them.
+
+    Args:
+        df: Input DataFrame.
+        metadata_path: Parquet file with one row per publication (DOI and countries).
+        author_col: Column with the ISO2 codes of the author countries.
+        doi_col: DOI column of df.
+        metadata_col: Column with the ISO2 country codes in the metadata file.
+
+    Returns:
+        Copy of the DataFrame with filled author countries (empty lists become None).
+    """
+    metadata = pd.read_parquet(metadata_path, columns=["DOI", metadata_col])
+    metadata = metadata.assign(DOI=metadata["DOI"].str.lower()).drop_duplicates("DOI")
+    filled = df[doi_col].str.lower().map(metadata.set_index("DOI")[metadata_col])
+
+    df = df.copy()
+    df[author_col] = df[author_col].where(df[author_col].notna(), filled)
+    df[author_col] = df[author_col].apply(
+        lambda x: None if x is None or isinstance(x, float) or len(x) == 0 else x
+    )
+    return df
+
+
+def assign_country(
+    df: pd.DataFrame,
+    spatial_col: str = "spatial_scope",
+    author_col: str = "author_countries",
+    output_col: str = "country",
+    all_author_countries: bool = False,
+    use_spatial_scope: bool = True,
+) -> pd.DataFrame:
+    """
+    Assign a country (ISO3 code) per value: spatial scope first, author country as fallback.
+
+    By default the author countries are only used if all authors of the publication
+    come from the same country, since several countries do not tell which one the
+    value is about.
+
+    Args:
+        df: Input DataFrame.
+        spatial_col: Column containing spatial scope data (dict with 'country').
+        author_col: Column containing the ISO2 codes of the author countries.
+        output_col: Name for the output country column. A column
+            '<output_col>_source' states 'spatial scope', 'author country' or None.
+        all_author_countries: If True, a value without spatial scope is assigned to
+            every country of its authors, i.e. the row is repeated once per country
+            (the index is kept, so repeated rows share it).
+        use_spatial_scope: If False, the spatial scope is ignored and the country
+            comes from the author countries only.
+
+    Returns:
+        Copy of the DataFrame with the country columns (None if no country is known).
+    """
+    from quinex_application.postprocessing.country_codes import country_to_iso3
+
+    def _spatial(x):
+        if isinstance(x, str):
+            x = ast.literal_eval(x)
+        if isinstance(x, dict) and x.get('country'):
+            return country_to_iso3(x['country'])
+        return None
+
+    def _authors(x):
+        if x is None or isinstance(x, float):
+            return []
+        return sorted({c for c in map(country_to_iso3, x) if c is not None})
+
+    df = df.copy()
+    spatial = df[spatial_col].apply(_spatial) if use_spatial_scope else pd.Series(None, index=df.index, dtype=object)
+    authors = df[author_col].apply(_authors)
+    if all_author_countries:
+        author = authors.apply(lambda c: c if c else None)
+    else:
+        author = authors.apply(lambda c: c[0] if len(c) == 1 else None)
+    df[output_col] = spatial.where(spatial.notna(), author)
+    df[f"{output_col}_source"] = np.where(
+        spatial.notna(), "spatial scope",
+        np.where(author.notna(), "author country", None),
+    )
+    return df.explode(output_col) if all_author_countries else df
 
 
 def apply_jitter(

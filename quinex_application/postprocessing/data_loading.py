@@ -3,6 +3,7 @@ Memory-efficient loading of the quinex parquet datasets.
 """
 
 import re
+from pathlib import Path
 
 import pandas as pd
 import pyarrow.parquet as pq
@@ -130,3 +131,35 @@ def filter_by_unit_uri(
         return len(units) == 1 and units[0].get('unit_uri') in unit_uris
 
     return df[df[unit_col].apply(_matches)].copy()
+
+
+def load_reference_series(folder: str | list) -> pd.DataFrame:
+    """
+    Load external reference series (e.g. IRENA) to compare extracted values with.
+
+    Every CSV file in the folder is one comparison line, with the columns entity,
+    year and value (further columns such as unit and source are kept). The result
+    is passed as 'additional_data' to plot_multiple_properties_over_time, which
+    draws the line in the color of its entity. Several lines of the same entity
+    (e.g. new projects and existing fleet) are told apart by the optional columns
+    'series' (name shown in the line style legend) and 'linestyle' (matplotlib
+    style, default '--').
+
+    Args:
+        folder: Folder with one CSV file per reference series, or a list of such
+            folders (e.g. the new-project and the existing-fleet folder).
+
+    Returns:
+        DataFrame with all series of the folder(s).
+    """
+    folders = [folder] if isinstance(folder, (str, Path)) else folder
+    files = sorted(f for d in folders for f in Path(d).glob("*.csv"))
+    if not files:
+        raise FileNotFoundError(f"No CSV files found in {folder}")
+
+    series = [pd.read_csv(f) for f in files]
+    for f, s in zip(files, series):
+        missing = {"entity", "year", "value"} - set(s.columns)
+        if missing:
+            raise KeyError(f"{f.name} is missing the columns {sorted(missing)}")
+    return pd.concat(series, ignore_index=True)
